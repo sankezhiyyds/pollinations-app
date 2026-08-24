@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="zh" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="dark light">
+<title data-i18n="app.title">Pollinations Studio</title>
+<meta name="description" content="A BYOK static web studio for Pollinations.ai image, text, speech & video generation.">
+<link rel="preconnect" href="https://gen.pollinations.ai">
+<link rel="stylesheet" href="./style.css">
+</head>
+<body>
+
+<div id="app" class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-dot"></span>
+      <span class="brand-name" data-i18n="app.title">Pollinations Studio</span>
+      <span id="tierBadge" class="badge hidden"></span>
+    </div>
+    <div class="topbar-right">
+      <select id="langSelect" class="mini-select" data-i18n-title="header.lang" title="语言">
+        <option value="zh">简体中文</option>
+        <option value="en">English</option>
+        <option value="ja">日本語</option>
+      </select>
+      <button id="themeBtn" class="icon-btn" type="button" title="主题">🌙</button>
+      <button id="loginBtn" class="btn tiny primary hidden" type="button" data-i18n="header.login">登录</button>
+      <button id="logoutBtn" class="btn tiny hidden" type="button" data-i18n="header.logout">退出</button>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="image" data-i18n="nav.image">图片生成</button>
+    <button class="tab" data-tab="text" data-i18n="nav.text">文本对话</button>
+    <button class="tab" data-tab="audio" data-i18n="nav.audio">语音合成</button>
+    <button class="tab" data-tab="video" data-i18n="nav.video">视频生成</button>
+    <button class="tab" data-tab="tools" data-i18n="nav.tools">工具箱</button>
+    <button class="tab" data-tab="history" data-i18n="nav.history">历史记录</button>
+  </nav>
+
+  <main class="panels">
+
+    <section id="panel-image" class="panel active">
+      <div class="col-form">
+        <div class="mode-toggle">
+          <button id="imgModeGen" class="active" data-i18n="img.modeGen">文生图</button>
+          <button id="imgModeEdit" data-i18n="img.modeEdit">图生图</button>
+        </div>
+
+        <div id="imgEditInput" class="hidden" style="margin-bottom:10px">
+          <div id="imgUploadArea" class="upload-area" data-i18n="img.uploadHint">
+            点击或拖入图片
+          </div>
+        </div>
+
+        <label class="lbl" data-i18n="img.prompt">提示词</label>
+        <textarea id="imgPrompt" rows="4" data-i18n-ph="img.promptPh"
+                  placeholder="一只戴着宇航头盔的柴犬，赛博朋克霓虹街道"></textarea>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="img.model">模型</label>
+            <select id="imgModel" class="select"></select>
+          </div>
+          <div class="grow">
+            <label class="lbl" data-i18n="img.ratio">尺寸</label>
+            <select id="imgRatio" class="select">
+              <option value="1024x1024">1:1 · 1024×1024</option>
+              <option value="1024x768">4:3 · 1024×768</option>
+              <option value="768x1024">3:4 · 768×1024</option>
+              <option value="1280x720">16:9 · 1280×720</option>
+              <option value="720x1280">9:16 · 720×1280</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="img.seed">随机种子</label>
+            <div class="field">
+              <input id="imgSeed" type="number" inputmode="numeric" placeholder="42">
+              <button id="seedBtn" class="icon-btn" type="button" data-i18n-title="img.random" title="随机">🎲</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="checks">
+          <label><input id="optNologo" type="checkbox" checked><span data-i18n="img.nologo">去水印</span></label>
+          <label><input id="optEnhance" type="checkbox"><span data-i18n="img.enhance">增强提示词</span></label>
+          <label><input id="optPrivate" type="checkbox" checked><span data-i18n="img.private">不进公共流</span></label>
+        </div>
+
+        <button id="imgBtn" class="btn primary block" data-i18n="img.generate">生成图片</button>
+        <p id="imgHint" class="hint"></p>
+      </div>
+
+      <div class="col-view">
+        <div id="imgStage" class="stage">
+          <div class="stage-empty" data-i18n="img.empty">生成的图片会出现在这里</div>
+        </div>
+        <div id="imgActions" class="stage-actions hidden">
+          <button id="dlBtn" class="btn tiny" data-i18n="img.download">下载</button>
+          <button id="againBtn" class="btn tiny" data-i18n="img.again">换一张</button>
+          <span id="imgMeta" class="meta"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-text" class="panel">
+      <div class="chat-setting">
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="txt.model">模型</label>
+            <select id="txtModel" class="select"></select>
+          </div>
+          <div class="grow">
+            <label class="lbl"><span data-i18n="txt.temp">温度</span> <b id="tempVal">0.7</b></label>
+            <input id="txtTemp" type="range" min="0" max="2" step="0.1" value="0.7" class="range">
+          </div>
+        </div>
+        <details class="sys">
+          <summary data-i18n="txt.system">系统提示词</summary>
+          <textarea id="txtSystem" rows="2" data-i18n-ph="txt.systemPh"
+                    placeholder="你是一个简洁友好的助手。"></textarea>
+        </details>
+      </div>
+
+      <div id="chatBox" class="chat-box">
+        <div class="chat-empty" data-i18n="txt.empty">开始你的第一句话吧</div>
+      </div>
+
+      <div class="chat-input">
+        <textarea id="txtInput" rows="1" data-i18n-ph="txt.inputPh" placeholder="输入消息，Enter 发送 / Shift+Enter 换行"></textarea>
+        <button id="sendBtn" class="btn primary" data-i18n="txt.send">发送</button>
+        <button id="stopBtn" class="btn danger hidden" data-i18n="txt.stop">停止</button>
+        <button id="clearBtn" class="btn tiny" data-i18n="txt.clear">清空</button>
+      </div>
+    </section>
+
+    <section id="panel-audio" class="panel">
+      <div class="col-form">
+        <div id="audioNeedKey" class="needkey hidden" data-i18n="need.key">该功能需要 API Key，匿名模式不可用</div>
+
+        <label class="lbl" data-i18n="aud.text">要朗读的文本</label>
+        <textarea id="audText" rows="5" data-i18n-ph="aud.textPh"
+                  placeholder="你好，欢迎使用 Pollinations Studio。"></textarea>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="aud.model">模型</label>
+            <select id="audModel" class="select"></select>
+          </div>
+          <div class="grow">
+            <label class="lbl" data-i18n="aud.voice">音色</label>
+            <select id="audVoice" class="select"></select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="aud.format">输出格式</label>
+            <select id="audFormat" class="select">
+              <option value="mp3">MP3</option>
+              <option value="wav">WAV</option>
+              <option value="opus">Opus</option>
+              <option value="flac">FLAC</option>
+              <option value="aac">AAC</option>
+            </select>
+          </div>
+          <div class="grow">
+            <label class="lbl" data-i18n="aud.instructions">情绪 / 风格</label>
+            <input id="audInstruct" type="text" data-i18n-ph="aud.instructionsPh" placeholder="温柔、缓慢">
+          </div>
+        </div>
+
+        <button id="audBtn" class="btn primary block" data-i18n="aud.generate">生成语音</button>
+        <p id="audHint" class="hint"></p>
+      </div>
+
+      <div class="col-view">
+        <div id="audStage" class="stage">
+          <div class="stage-empty" data-i18n="aud.empty">生成的语音会出现在这里</div>
+        </div>
+        <div id="audActions" class="stage-actions hidden">
+          <button id="audDl" class="btn tiny" data-i18n="aud.download">下载</button>
+          <button id="audAgain" class="btn tiny" data-i18n="aud.again">重新生成</button>
+          <span id="audMeta" class="meta"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-video" class="panel">
+      <div class="col-form">
+        <div id="videoNeedKey" class="needkey hidden" data-i18n="need.key">该功能需要 API Key，匿名模式不可用</div>
+
+        <label class="lbl" data-i18n="vid.prompt">提示词</label>
+        <textarea id="vidPrompt" rows="4" data-i18n-ph="vid.promptPh"
+                  placeholder="一只柴犬在樱花树下奔跑，电影镜头感"></textarea>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl" data-i18n="vid.model">模型</label>
+            <select id="vidModel" class="select"></select>
+          </div>
+          <div class="grow">
+            <label class="lbl" data-i18n="vid.resolution">分辨率</label>
+            <select id="vidRes" class="select"></select>
+          </div>
+        </div>
+
+        <div class="row">
+          <div class="grow">
+            <label class="lbl"><span data-i18n="vid.duration">时长(秒)</span> <b id="vidDurVal">4</b></label>
+            <input id="vidDur" type="range" min="2" max="10" step="1" value="4" class="range">
+          </div>
+          <div class="grow">
+            <label class="lbl" data-i18n="vid.ratio">画面比例</label>
+            <select id="vidRatio" class="select">
+              <option value="16:9">16:9</option>
+              <option value="9:16">9:16</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="checks">
+          <label><input id="vidAudio" type="checkbox"><span data-i18n="vid.audio">生成配音</span></label>
+        </div>
+
+        <p class="warn" data-i18n="vid.cost">视频按秒计费，生成较慢，请耐心等待</p>
+        <button id="vidBtn" class="btn primary block" data-i18n="vid.generate">生成视频</button>
+        <p id="vidHint" class="hint"></p>
+      </div>
+
+      <div class="col-view">
+        <div id="vidStage" class="stage">
+          <div class="stage-empty" data-i18n="vid.empty">生成的视频会出现在这里</div>
+        </div>
+        <div id="vidActions" class="stage-actions hidden">
+          <button id="vidDl" class="btn tiny" data-i18n="vid.download">下载</button>
+          <button id="vidAgain" class="btn tiny" data-i18n="vid.again">重新生成</button>
+          <span id="vidMeta" class="meta"></span>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-tools" class="panel">
+      <div class="tool-section">
+
+        <div class="tool-card">
+          <h3 data-i18n="tool.convertTitle">图片格式转换</h3>
+          <div id="convDrop" class="drop-zone" data-i18n="tool.convertHint">
+            点击或拖入图片
+          </div>
+          <div id="convPreview" class="hidden" style="margin-top:12px">
+            <div class="row" style="margin-bottom:10px">
+              <div class="grow">
+                <label class="lbl" data-i18n="tool.format">输出格式</label>
+                <select id="convFormat" class="select">
+                  <option value="png">PNG</option>
+                  <option value="jpeg">JPEG</option>
+                  <option value="webp">WebP</option>
+                </select>
+              </div>
+              <div class="grow" id="convQualityRow" class="hidden">
+                <label class="lbl"><span data-i18n="tool.quality">质量</span> <b id="convQVal">92</b></label>
+                <input id="convQuality" type="range" min="10" max="100" value="92" class="range">
+              </div>
+            </div>
+            <button id="convBtn" class="btn primary" data-i18n="tool.convert">转换并下载</button>
+          </div>
+        </div>
+
+      </div>
+    </section>
+
+    <section id="panel-history" class="panel">
+      <div class="hist-head">
+        <span id="histCount" class="meta"></span>
+        <button id="histClear" class="btn tiny" data-i18n="hist.clear">清空历史</button>
+      </div>
+      <div id="histList" class="hist-list"></div>
+    </section>
+
+  </main>
+
+  <div id="assistant" class="assistant">
+    <div id="bubble" class="bubble hidden"><span id="bubbleText"></span></div>
+    <button id="mascotBtn" class="mascot-btn" type="button" aria-label="assistant">
+      <svg viewBox="0 0 120 120" class="mascot-svg small" aria-hidden="true">
+        <g class="m-body">
+          <circle cx="60" cy="60" r="42" class="m-face"/>
+          <circle cx="46" cy="55" r="6" class="m-eye"/>
+          <circle cx="74" cy="55" r="6" class="m-eye"/>
+          <circle cx="47.6" cy="53" r="2" class="m-glint"/>
+          <circle cx="75.6" cy="53" r="2" class="m-glint"/>
+          <ellipse cx="34" cy="68" rx="7" ry="4.5" class="m-blush"/>
+          <ellipse cx="86" cy="68" rx="7" ry="4.5" class="m-blush"/>
+          <path d="M52 72 Q60 80 68 72" class="m-mouth"/>
+          <path d="M60 18 L60 8" class="m-antenna"/>
+          <circle cx="60" cy="6" r="5" class="m-bulb"/>
+        </g>
+      </svg>
+    </button>
+  </div>
+
+  <div id="toast" class="toast"></div>
+</div>
+
+<!-- 登录弹窗 -->
+<div id="loginModal" class="modal hidden">
+  <div class="modal-backdrop"></div>
+  <div class="modal-dialog">
+    <button class="modal-close" type="button" data-close-modal aria-label="close">✕</button>
+    <div class="modal-mascot">
+      <svg viewBox="0 0 120 120" class="mascot-svg" aria-hidden="true">
+        <ellipse cx="60" cy="104" rx="34" ry="7" class="m-shadow"/>
+        <g class="m-body">
+          <circle cx="60" cy="60" r="42" class="m-face"/>
+          <circle cx="46" cy="55" r="6" class="m-eye"/>
+          <circle cx="74" cy="55" r="6" class="m-eye"/>
+          <circle cx="47.6" cy="53" r="2" class="m-glint"/>
+          <circle cx="75.6" cy="53" r="2" class="m-glint"/>
+          <ellipse cx="34" cy="68" rx="7" ry="4.5" class="m-blush"/>
+          <ellipse cx="86" cy="68" rx="7" ry="4.5" class="m-blush"/>
+          <path d="M52 72 Q60 80 68 72" class="m-mouth"/>
+          <path d="M60 18 L60 8" class="m-antenna"/>
+          <circle cx="60" cy="6" r="5" class="m-bulb"/>
+        </g>
+      </svg>
+    </div>
+    <h2 class="modal-title" data-i18n="login.title">Pollinations Studio</h2>
+    <p class="modal-desc" data-i18n="login.desc">用你自己的 API Key 登录，Key 只存在你的浏览器里，不会上传到任何第三方服务器。</p>
+
+    <div class="field" style="margin-top:16px">
+      <input id="keyInput" type="password" autocomplete="off" spellcheck="false"
+             data-i18n-ph="login.placeholder" placeholder="sk_... / pk_...">
+      <button id="keyToggle" class="icon-btn" type="button" data-i18n-title="login.show" title="显示">👁</button>
+    </div>
+    <label class="remember">
+      <input id="rememberKey" type="checkbox" checked>
+      <span data-i18n="login.remember">在本机记住这个 Key</span>
+    </label>
+
+    <button id="loginSubmitBtn" class="btn primary block" data-i18n="login.submit">验证并进入</button>
+    <button id="anonBtn" class="btn ghost block" data-i18n="login.anon">先匿名试用（有速率限制）</button>
+
+    <p id="loginMsg" class="login-msg"></p>
+
+    <div class="modal-foot">
+      <a href="https://enter.pollinations.ai/keys" target="_blank" rel="noopener" data-i18n="login.getkey">还没有 Key？点此获取</a>
+      <span class="dot">·</span>
+      <span data-i18n="login.privacy">Key 不会上传到任何第三方服务器</span>
+    </div>
+  </div>
+</div>
+
+<script src="./i18n.js"></script>
+<script src="./app.js"></script>
+</body>
+</html>

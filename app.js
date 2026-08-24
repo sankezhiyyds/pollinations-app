@@ -1,0 +1,1291 @@
+// ============================================================
+// Pollinations Studio · BYOK 纯前端应用
+// 端点说明（依据官方 APIDOCS）：
+//   新版统一 API: https://gen.pollinations.ai
+//     图片 GET  /image/{prompt}
+//     文本 POST /v1/chat/completions
+//     模型 GET  /image/models, /v1/models
+//   旧版（无 Key 也可用，作为回退）:
+//     图片 GET  https://image.pollinations.ai/prompt/{prompt}
+//     文本 POST https://text.pollinations.ai/openai
+// 鉴权：Authorization: Bearer <key>，图片直连 URL 用 ?key=<key>
+// ============================================================
+
+const API = {
+  get base() {
+    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
+    if (provider === 'custom') {
+      return (localStorage.getItem(STORE.customEndpoint) || '').replace(/\/+$/, '');
+    }
+    return 'https://gen.pollinations.ai';
+  },
+  get legacyImage() {
+    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
+    if (provider === 'custom') return this.base;
+    return 'https://image.pollinations.ai';
+  },
+  get legacyText() {
+    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
+    if (provider === 'custom') return this.base;
+    return 'https://text.pollinations.ai';
+  }
+};
+
+const STORE = {
+  key: 'pl_api_key',
+  theme: 'pl_theme',
+  hist: 'pl_history',
+  anon: 'pl_anon',
+  mascot: 'pl_mascot_pos',
+  provider: 'pl_api_provider',
+  customEndpoint: 'pl_custom_endpoint'
+};
+
+const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
+const FALLBACK_TEXT_MODELS = ['openai', 'openai-fast', 'openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
+const FALLBACK_AUDIO_MODELS = ['grok-tts', 'qwen-tts', 'elevenlabs', 'elevenflash', 'kokoro', 'fish-audio-s2.1-pro'];
+const FALLBACK_VIDEO_MODELS = ['minimax-h3', 'seedance-2.0', 'veo', 'wan', 'wan-fast', 'wan-pro', 'nova-reel'];
+const FALLBACK_VIDEO_RESOLUTIONS = ['480p', '720p', '1k', '1080p', '2k', '4k'];
+
+const state = {
+  apiKey: '',
+  anonymous: false,
+  balance: null,
+  messages: [],
+  history: [],
+  lastImage: null,
+  lastAudio: null,
+  lastVideo: null,
+  abort: null,
+  generating: false
+};
+
+const $ = id => document.getElementById(id);
+
+// ---------- 通用工具 ----------
+
+// 统一构造请求头：有 Key 就带 Bearer，匿名则不带
+function authHeaders(extra) {
+  const h = Object.assign({}, extra || {});
+  if (state.apiKey) h['Authorization'] = 'Bearer ' + state.apiKey;
+  return h;
+}
+
+function toast(msg) {
+  const el = $('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  clearTimeout(toast._t);
+  toast._t = setTimeout(() => el.classList.remove('show'), 2600);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
+function randSeed() {
+  return Math.floor(Math.random() * 1000000);
+}
+
+// ---------- 可爱助手浮窗 ----------
+
+const assistant = {
+  timer: null,
+  idle: null,
+
+  say(key, vars, ms) {
+    const bubble = $('bubble');
+    $('bubbleText').textContent = t(key, vars);
+    bubble.classList.remove('hidden');
+    void bubble.offsetWidth;
+    bubble.classList.add('pop');
+    $('mascotBtn').classList.add('bounce');
+
+    clearTimeout(this.timer);
+    this.timer = setTimeout(() => {
+      bubble.classList.remove('pop');
+      $('mascotBtn').classList.remove('bounce');
+      setTimeout(() => bubble.classList.add('hidden'), 200);
+    }, ms || 4200);
+
+    this.resetIdle();
+  },
+
+  // 随机小贴士，点小花头像时轮播
+  tip() {
+    const tips = ['ast.tipSeed', 'ast.tipRatio', 'ast.tipEnhance', 'ast.tipModel', 'ast.firstImage'];
+    this.say(tips[Math.floor(Math.random() * tips.length)]);
+  },
+
+  // 长时间无操作时主动冒个泡
+  resetIdle() {
+    clearTimeout(this.idle);
+    this.idle = setTimeout(() => this.say('ast.idle'), 90000);
+  },
+
+  think(on) {
+    $('mascotBtn').classList.toggle('thinking', !!on);
+  }
+};
+
+// ---------- 登录 / 鉴权 ----------
+
+// 校验 Key：必须用 /account/balance
+// 注意：不能用 /v1/models，那是公开端点，任何乱码 Key 都会返回 200，等于没校验
+// /account/balance 强制鉴权且不消耗额度，无 Key / 无效 Key 均返回 401
+async function verifyKey(key) {
+  try {
+    const res = await fetch(API.base + '/account/balance', {
+      headers: { 'Authorization': 'Bearer ' + key }
+    });
+    if (res.status === 401 || res.status === 403) return 'invalid';
+    if (!res.ok) return 'neterr';
+
+    let balance = null;
+    try {
+      const data = await res.json();
+      const raw = data && (data.balance != null ? data.balance
+        : (data.data && data.data.balance != null ? data.data.balance : null));
+      if (raw != null) balance = Number(raw);
+    } catch (e) { /* 余额解析失败不影响登录 */ }
+
+    state.balance = balance;
+    return 'ok';
+  } catch (e) {
+    return 'neterr';
+  }
+}
+
+async function doLogin() {
+  const key = $('keyInput').value.trim();
+  const msg = $('loginMsg');
+
+  if (!key) {
+    msg.className = 'login-msg err';
+    msg.textContent = t('login.empty');
+    return;
+  }
+
+  $('loginSubmitBtn').disabled = true;
+  msg.className = 'login-msg';
+  msg.textContent = t('login.checking');
+
+  const result = await verifyKey(key);
+  $('loginSubmitBtn').disabled = false;
+
+  if (result === 'invalid') {
+    msg.className = 'login-msg err';
+    msg.textContent = t('login.fail');
+    return;
+  }
+  if (result === 'neterr') {
+    msg.className = 'login-msg err';
+    msg.textContent = t('login.neterr');
+    return;
+  }
+
+  msg.className = 'login-msg ok';
+  msg.textContent = t('login.ok');
+
+  state.apiKey = key;
+  state.anonymous = false;
+  if ($('rememberKey').checked) {
+    localStorage.setItem(STORE.key, key);
+  }
+  localStorage.removeItem(STORE.anon);
+  setTimeout(enterApp, 420);
+}
+
+function doAnonymous() {
+  state.apiKey = '';
+  state.anonymous = true;
+  localStorage.setItem(STORE.anon, '1');
+  enterApp();
+  toast(t('login.anonNote'));
+}
+
+function doLogout() {
+  localStorage.removeItem(STORE.key);
+  localStorage.removeItem(STORE.anon);
+  state.apiKey = '';
+  state.anonymous = false;
+  state.balance = null;
+  state.messages = [];
+  state.lastImage = null;
+  state.lastAudio = null;
+  state.lastVideo = null;
+  $('keyInput').value = '';
+  $('loginMsg').textContent = '';
+  updateBadge();
+  $('logoutBtn').classList.add('hidden');
+  $('loginBtn').classList.remove('hidden');
+  openLoginModal();
+}
+
+function openLoginModal() {
+  $('loginModal').classList.remove('hidden');
+  setTimeout(() => $('keyInput').focus(), 100);
+}
+
+function closeLoginModal() {
+  $('loginModal').classList.add('hidden');
+}
+
+function enterApp() {
+  closeLoginModal();
+
+  updateBadge();
+  updateNeedKeyVisibility();
+  $('loginBtn').classList.add('hidden');
+  $('logoutBtn').classList.remove('hidden');
+  loadModels();
+  renderHistory();
+  setTimeout(() => assistant.say('ast.welcome'), 700);
+}
+
+function updateBadge() {
+  const badge = $('tierBadge');
+  if (state.anonymous) {
+    badge.textContent = t('tier.anon');
+    badge.className = 'badge gray';
+    badge.classList.remove('hidden');
+  } else {
+    badge.textContent = state.balance != null
+      ? t('tier.key') + ' · ' + state.balance.toFixed(2)
+      : t('tier.key');
+    badge.className = 'badge green';
+    badge.classList.remove('hidden');
+  }
+}
+
+// ---------- 模型列表 ----------
+
+// 新版接口拿不到就退回预置列表，保证界面永远可用
+async function loadModels() {
+  fillSelect($('imgModel'), FALLBACK_IMAGE_MODELS, 'flux');
+  fillSelect($('txtModel'), FALLBACK_TEXT_MODELS, 'openai');
+
+  try {
+    const res = await fetch(API.base + '/image/models', { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const list = normalizeModels(data);
+      if (list.length) fillSelect($('imgModel'), list, 'flux');
+    }
+  } catch (e) { /* 静默回退 */ }
+
+  try {
+    const res = await fetch(API.base + '/v1/models', { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const list = normalizeModels(data);
+      if (list.length) fillSelect($('txtModel'), list, 'openai');
+    }
+  } catch (e) { /* 静默回退 */ }
+
+  try {
+    const res = await fetch(API.base + '/audio/models', { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const list = normalizeModels(data);
+      if (list.length) fillSelect($('audModel'), list, 'grok-tts');
+    }
+  } catch (e) { /* 静默回退 */ }
+
+  try {
+    const res = await fetch(API.base + '/video/models', { headers: authHeaders() });
+    if (res.ok) {
+      const data = await res.json();
+      const list = normalizeModels(data);
+      if (list.length) fillSelect($('vidModel'), list, 'minimax-h3');
+    }
+  } catch (e) { /* 静默回退 */ }
+}
+
+// 兼容三种返回形态：字符串数组 / 对象数组 / OpenAI 风格 {data:[...]}
+function normalizeModels(data) {
+  let arr = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
+  return arr
+    .map(m => typeof m === 'string' ? m : (m.id || m.name || m.model))
+    .filter(Boolean);
+}
+
+function fillSelect(sel, list, preferred) {
+  sel.innerHTML = '';
+  list.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (list.includes(preferred)) sel.value = preferred;
+}
+
+// ---------- 图片生成 ----------
+
+function buildImageUrl(prompt, opts) {
+  const p = new URLSearchParams();
+  p.set('model', opts.model);
+  p.set('width', opts.width);
+  p.set('height', opts.height);
+  p.set('seed', opts.seed);
+  if (opts.nologo) p.set('nologo', 'true');
+  if (opts.enhance) p.set('enhance', 'true');
+  if (opts.priv) p.set('private', 'true');
+  // 图片是 <img> 直连，无法带请求头，官方支持用 ?key= 传递
+  if (state.apiKey) p.set('key', state.apiKey);
+  else p.set('referrer', location.hostname || 'localhost');
+
+  const base = localStorage.getItem(STORE.provider) === 'custom' ? API.base : API.gen;
+  return base + '/image/' + encodeURIComponent(prompt) + '?' + p.toString();
+}
+
+function buildLegacyImageUrl(prompt, opts) {
+  const p = new URLSearchParams();
+  p.set('model', opts.model);
+  p.set('width', opts.width);
+  p.set('height', opts.height);
+  p.set('seed', opts.seed);
+  if (opts.nologo) p.set('nologo', 'true');
+  if (opts.enhance) p.set('enhance', 'true');
+  if (opts.priv) p.set('private', 'true');
+  p.set('referrer', location.hostname || 'localhost');
+  return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
+}
+
+// 图生图：kontext 模型通过 image 参数接收输入图
+function buildEditImageUrl(prompt, imageUrl, opts) {
+  const p = new URLSearchParams();
+  p.set('model', 'kontext');
+  p.set('image', imageUrl);
+  p.set('width', opts.width);
+  p.set('height', opts.height);
+  p.set('seed', opts.seed);
+  if (opts.nologo) p.set('nologo', 'true');
+  if (state.apiKey) p.set('key', state.apiKey);
+  else p.set('referrer', location.hostname || 'localhost');
+  return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
+}
+
+// 文件转 data URL
+function fileToDataURL(file) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(file);
+  });
+}
+
+// 缩小图片以避免 data URL 过长
+async function resizeImage(dataUrl, maxDim) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      let { width: w, height: h } = img;
+      const scale = Math.min(1, maxDim / Math.max(w, h));
+      if (scale >= 1) { resolve(dataUrl); return; }
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+      const c = document.createElement('canvas');
+      c.width = w; c.height = h;
+      c.getContext('2d').drawImage(img, 0, 0, w, h);
+      resolve(c.toDataURL('image/jpeg', 0.85));
+    };
+    img.onerror = () => resolve(dataUrl);
+    img.src = dataUrl;
+  });
+}
+
+let imgEditImageData = null; // 当前上传的图生图源图 data URL
+
+async function generateImage(reuseSeed) {
+  const prompt = $('imgPrompt').value.trim();
+  if (!prompt) {
+    $('imgHint').textContent = t('img.needPrompt');
+    assistant.say('ast.firstImage');
+    return;
+  }
+  if (state.generating) return;
+
+  const isEditMode = !$('imgEditInput').classList.contains('hidden');
+  if (isEditMode && !imgEditImageData) {
+    $('imgHint').textContent = t('img.needImage');
+    return;
+  }
+
+  const model = isEditMode ? 'kontext' : $('imgModel').value;
+  let [width, height] = $('imgRatio').value.split('x').map(Number);
+
+  // seedream 官方要求最小 960×960
+  if (model === 'seedream' && (width < 960 || height < 960)) {
+    width = Math.max(width, 960);
+    height = Math.max(height, 960);
+    toast(t('img.seedreamNote'));
+  }
+
+  if (!reuseSeed) {
+    if (!$('imgSeed').value) $('imgSeed').value = randSeed();
+  } else {
+    $('imgSeed').value = randSeed();
+  }
+  const seed = Number($('imgSeed').value);
+
+  const opts = {
+    model, width, height, seed,
+    nologo: $('optNologo').checked,
+    enhance: $('optEnhance').checked,
+    priv: $('optPrivate').checked
+  };
+
+  state.abort = new AbortController();
+  state.generating = true;
+  $('imgBtn').disabled = true;
+  $('imgBtn').textContent = t('img.generating');
+  $('imgHint').textContent = '';
+  $('imgActions').classList.add('hidden');
+  $('imgStage').innerHTML = '<div class="spinner"></div>';
+  assistant.think(true);
+  assistant.say('ast.imgStart');
+
+  const started = Date.now();
+  // 图生图模式：用 kontext 模型 + image 参数
+  const legacy = isEditMode
+    ? buildEditImageUrl(prompt, imgEditImageData, opts)
+    : buildLegacyImageUrl(prompt, opts);
+
+  try {
+    // 图生图模式只走旧版端点（kontext + image 参数）
+    // 实测：gen.pollinations.ai/image 强制要 Key，匿名必定 401
+    const got = isEditMode
+      ? await loadImage(legacy)
+      : state.apiKey
+        ? await loadImageWithFallback(buildImageUrl(prompt, opts), legacy)
+        : await loadImage(legacy);
+    const url = got.url;
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+
+    // 实测服务端会按模型能力调整尺寸(如请求 1024 实返 768)，所以显示真实值
+    const realW = got.w || width;
+    const realH = got.h || height;
+
+    $('imgStage').innerHTML =
+      '<img class="result-img" alt="' + escapeHtml(prompt) + '" src="' + url + '">';
+    $('imgActions').classList.remove('hidden');
+    $('imgMeta').textContent = model + ' · ' + realW + '×' + realH + ' · seed ' + seed + ' · ' + secs + 's';
+    $('imgHint').textContent = t('img.done');
+
+    state.lastImage = { url, prompt, model, width: realW, height: realH, seed };
+    pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url, at: Date.now() });
+
+    assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
+  } catch (e) {
+    // 图片走 <img> 加载，拿不到状态码；匿名失败绝大多数是限流(约15秒1次)
+    const msg = state.apiKey ? t('img.fail') : t('img.rate');
+    $('imgStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    $('imgHint').textContent = msg;
+    assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
+  } finally {
+    state.generating = false;
+    assistant.think(false);
+    $('imgBtn').disabled = false;
+    $('imgBtn').textContent = t('img.generate');
+  }
+}
+
+// ---------- 音频生成 ----------
+
+function buildAudioUrl(text, opts) {
+  const p = new URLSearchParams();
+  p.set('text', text);
+  p.set('model', opts.model);
+  if (opts.voice) p.set('voice', opts.voice);
+  p.set('response_format', opts.format || 'mp3');
+  if (opts.instructions) p.set('instructions', opts.instructions);
+  p.set('key', state.apiKey);
+  return API.gen + '/audio/' + encodeURIComponent(text) + '?' + p.toString();
+}
+
+async function generateAudio(reuse) {
+  const text = $('audText').value.trim();
+  const model = $('audModel').value;
+  const voice = $('audVoice').value;
+  const format = $('audFormat').value;
+  const instructions = $('audInstruct').value.trim();
+
+  if (state.generating) return;
+  if (!text) {
+    $('audHint').textContent = t('aud.needText');
+    return;
+  }
+
+  $('audStage').innerHTML = '<div class="spinner"></div>';
+  $('audActions').classList.add('hidden');
+  $('audHint').textContent = '';
+  $('audBtn').disabled = true;
+  $('audBtn').textContent = t('aud.generating');
+  assistant.think(true);
+
+  const started = Date.now();
+  const url = buildAudioUrl(reuse && state.lastAudio ? state.lastAudio.prompt : text, {
+    model, voice, format, instructions
+  });
+
+  try {
+    // 匿名模式 audio/video 强制要 Key，显示提示
+    if (!state.apiKey) {
+      throw new Error('no-key');
+    }
+    const resp = await fetch(url, { signal: state.abort.signal });
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    const blob = await resp.blob();
+    const local = URL.createObjectURL(blob);
+    $('audStage').innerHTML =
+      '<audio controls class="result-audio" src="' + local + '">' +
+      '<p class="stage-empty" data-i18n="aud.empty">生成的语音会出现在这里</p></audio>';
+    $('audActions').classList.remove('hidden');
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    $('audMeta').textContent = model + ' · ' + format + ' · ' + secs + 's';
+    $('audHint').textContent = t('aud.done');
+    assistant.say(reuse ? 'ast.audioDone' : 'ast.audioDone', { s: secs });
+    state.lastAudio = { url: local, prompt: text, model, voice, format, instructions };
+    pushHistory({ type: 'audio', prompt: text, model, seed: null, size: format, url: local, at: Date.now() });
+  } catch (e) {
+    const msg = e.message === 'no-key' ? t('need.key') : (state.apiKey ? t('aud.fail') : t('aud.rate'));
+    $('audStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    $('audHint').textContent = msg;
+    assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
+  } finally {
+    state.generating = false;
+    assistant.think(false);
+    $('audBtn').disabled = false;
+    $('audBtn').textContent = t('aud.generate');
+  }
+}
+
+// ---------- 视频生成 ----------
+
+function buildVideoUrl(prompt, opts) {
+  const p = new URLSearchParams();
+  p.set('prompt', prompt);
+  p.set('model', opts.model);
+  if (opts.resolution) p.set('resolution', opts.resolution);
+  if (opts.duration) p.set('duration', opts.duration);
+  if (opts.aspectRatio) p.set('aspectRatio', opts.aspectRatio);
+  if (opts.audio) p.set('audio', 'true');
+  if (opts.seed != null) p.set('seed', opts.seed);
+  p.set('key', state.apiKey);
+  const base = localStorage.getItem(STORE.provider) === 'custom' ? API.base : API.gen;
+  return base + '/video/' + encodeURIComponent(prompt) + '?' + p.toString();
+}
+
+async function generateVideo(reuse) {
+  if (!state.apiKey) {
+    $('vidStage').innerHTML = '<div class="stage-empty">' + t('need.key') + '</div>';
+    $('vidHint').textContent = t('need.key');
+    return;
+  }
+  if (state.generating) return;
+  const prompt = $('vidPrompt').value.trim();
+  const model = $('vidModel').value;
+  const resolution = $('vidRes').value;
+  const duration = Number($('vidDur').value);
+  const aspectRatio = $('vidRatio').value;
+  const audio = $('vidAudio').checked;
+  const seed = randSeed();
+
+  if (!prompt) {
+    $('vidHint').textContent = t('vid.needPrompt');
+    return;
+  }
+
+  $('vidStage').innerHTML = '<div class="spinner"></div>';
+  $('vidActions').classList.add('hidden');
+  $('vidHint').textContent = '';
+  $('vidBtn').disabled = true;
+  $('vidBtn').textContent = t('vid.generating');
+  state.abort = new AbortController();
+  assistant.think(true);
+
+  const started = Date.now();
+  const url = buildVideoUrl(reuse && state.lastVideo ? state.lastVideo.prompt : prompt, {
+    model, resolution, duration, aspectRatio, audio, seed
+  });
+
+  try {
+    const resp = await fetch(url, { signal: state.abort.signal, headers: authHeaders() });
+    if (!resp.ok) throw new Error('http ' + resp.status);
+    const blob = await resp.blob();
+    const local = URL.createObjectURL(blob);
+    $('vidStage').innerHTML =
+      '<video controls class="result-video" src="' + local + '" playsinline></video>';
+    $('vidActions').classList.remove('hidden');
+    const secs = ((Date.now() - started) / 1000).toFixed(1);
+    $('vidMeta').textContent = model + ' · ' + resolution + ' · ' + duration + 's · ' + secs + 's';
+    $('vidHint').textContent = t('vid.done');
+    assistant.say(reuse ? 'ast.videoDone' : 'ast.videoDone', { s: secs });
+    state.lastVideo = { url: local, prompt, model, resolution, duration, aspectRatio, audio };
+    pushHistory({ type: 'video', prompt, model, seed, size: resolution, url: local, at: Date.now() });
+  } catch (e) {
+    const msg = state.apiKey ? t('vid.fail') : t('vid.rate');
+    $('vidStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    $('vidHint').textContent = msg;
+    assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
+  } finally {
+    state.generating = false;
+    assistant.think(false);
+    $('vidBtn').disabled = false;
+    $('vidBtn').textContent = t('vid.generate');
+  }
+}
+
+// ---------- 音频/视频的 Key 可见性 ----------
+
+function updateNeedKeyVisibility() {
+  const visible = !state.apiKey;
+  $('audioNeedKey').classList.toggle('hidden', !visible);
+  $('videoNeedKey').classList.toggle('hidden', !visible);
+}
+
+// 单个 URL 加载，回传真实尺寸
+function loadImage(url) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve({ url, w: img.naturalWidth, h: img.naturalHeight });
+    img.onerror = () => reject(new Error('image load failed'));
+    img.src = url;
+  });
+}
+
+// 先试新版端点，失败自动回退旧版，两边都挂才算失败
+function loadImageWithFallback(primary, fallback) {
+  return new Promise((resolve, reject) => {
+    const first = new Image();
+    first.onload = () => resolve({ url: primary, w: first.naturalWidth, h: first.naturalHeight });
+    first.onerror = () => {
+      const second = new Image();
+      second.onload = () => resolve({ url: fallback, w: second.naturalWidth, h: second.naturalHeight });
+      second.onerror = () => reject(new Error('both endpoints failed'));
+      second.src = fallback;
+    };
+    first.src = primary;
+  });
+}
+
+async function downloadImage() {
+  if (!state.lastImage) return;
+  try {
+    const res = await fetch(state.lastImage.url);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pollinations-' + state.lastImage.seed + '.jpg';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) {
+    window.open(state.lastImage.url, '_blank');
+  }
+}
+
+async function downloadAudio() {
+  if (!state.lastAudio) return;
+  try {
+    const res = await fetch(state.lastAudio.url);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pollinations-audio-' + Date.now() + '.mp3';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) {
+    window.open(state.lastAudio.url, '_blank');
+  }
+}
+
+async function downloadVideo() {
+  if (!state.lastVideo) return;
+  try {
+    const res = await fetch(state.lastVideo.url);
+    const blob = await res.blob();
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'pollinations-video-' + Date.now() + '.mp4';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) {
+    window.open(state.lastVideo.url, '_blank');
+  }
+}
+
+// ---------- 文本对话 ----------
+
+function renderChat() {
+  const box = $('chatBox');
+  if (!state.messages.length) {
+    box.innerHTML = '<div class="chat-empty">' + t('txt.empty') + '</div>';
+    return;
+  }
+  box.innerHTML = state.messages.map((m, i) => {
+    // 流式回复在首个 token 到达前是空的，给个占位免得出现空气泡
+    const body = m.content
+      ? escapeHtml(m.content).replace(/\n/g, '<br>')
+      : '<span class="msg-pending">' + t('txt.thinking') + '</span>';
+    return '<div class="msg ' + m.role + '">' +
+      '<div class="msg-body">' + body + '</div>' +
+      (m.role === 'assistant' && m.content
+        ? '<button class="copy-btn" data-copy="' + i + '">' + t('txt.copy') + '</button>'
+        : '') +
+    '</div>';
+  }).join('');
+  box.scrollTop = box.scrollHeight;
+}
+
+async function sendMessage() {
+  const input = $('txtInput');
+  const text = input.value.trim();
+  if (!text || state.generating) return;
+
+  state.messages.push({ role: 'user', content: text });
+  input.value = '';
+  input.style.height = 'auto';
+  renderChat();
+
+  const payload = {
+    model: $('txtModel').value,
+    messages: [],
+    temperature: Number($('txtTemp').value),
+    stream: true
+  };
+  const sys = $('txtSystem').value.trim();
+  if (sys) payload.messages.push({ role: 'system', content: sys });
+  payload.messages = payload.messages.concat(
+    state.messages.map(m => ({ role: m.role, content: m.content }))
+  );
+
+  state.generating = true;
+  state.abort = new AbortController();
+  $('sendBtn').classList.add('hidden');
+  $('stopBtn').classList.remove('hidden');
+  assistant.think(true);
+
+  state.messages.push({ role: 'assistant', content: '' });
+  const idx = state.messages.length - 1;
+  renderChat();
+
+  const signal = state.abort.signal;
+  // 实测旧版 text.pollinations.ai 匿名更稳定，故匿名优先旧版；有 Key 则优先新版
+  // 自定义 endpoint 只走自己配置的 base
+  const provider = localStorage.getItem(STORE.provider) || 'pollinations';
+  const chain = provider === 'custom'
+    ? [API.base + '/v1/chat/completions']
+    : state.apiKey
+      ? [API.base + '/v1/chat/completions', API.legacyText + '/openai']
+      : [API.legacyText + '/openai', API.base + '/v1/chat/completions'];
+
+  let result = false;
+  for (const endpoint of chain) {
+    result = await streamChat(endpoint, payload, idx);
+    if (result === true || signal.aborted) break;
+  }
+
+  if (!state.messages[idx].content) {
+    if (signal.aborted) {
+      state.messages.splice(idx, 1);
+    } else {
+      state.messages[idx].content = result === 'ratelimit' ? t('txt.rate') : t('txt.fail');
+      assistant.say(result === 'ratelimit' ? 'ast.rate' : 'ast.imgFail');
+    }
+  } else {
+    assistant.say('ast.textDone');
+    pushHistory({
+      type: 'text',
+      prompt: text,
+      model: payload.model,
+      reply: state.messages[idx].content.slice(0, 200),
+      at: Date.now()
+    });
+  }
+
+  renderChat();
+  state.generating = false;
+  state.abort = null;
+  assistant.think(false);
+  $('sendBtn').classList.remove('hidden');
+  $('stopBtn').classList.add('hidden');
+}
+
+// SSE 流式读取，逐字上屏
+// 返回 true=成功；'ratelimit'=被限流；false=其他失败(可回退)
+async function streamChat(endpoint, payload, idx) {
+  try {
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify(payload),
+      signal: state.abort.signal
+    });
+
+    // 实测：匿名调用会间歇性返回 401/429，属于限流而非 Key 无效
+    if (res.status === 401 || res.status === 429) return 'ratelimit';
+    if (!res.ok || !res.body) return false;
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+
+      for (const line of lines) {
+        const s = line.trim();
+        if (!s.startsWith('data:')) continue;
+        const data = s.slice(5).trim();
+        if (data === '[DONE]') continue;
+        try {
+          const json = JSON.parse(data);
+          const choice = json.choices && json.choices[0];
+          if (!choice) continue;
+          // 只取 content；旧版端点还会推 reasoning(思维链)，不能混进正文
+          const delta = choice.delta
+            ? choice.delta.content
+            : (choice.message && choice.message.content);
+          if (delta) {
+            state.messages[idx].content += delta;
+            renderChat();
+          }
+        } catch (e) { /* 跳过不完整分片 */ }
+      }
+    }
+    return state.messages[idx].content ? true : false;
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      toast(t('txt.stopped'));
+      return true;
+    }
+    return false;
+  }
+}
+
+// ---------- 历史记录 ----------
+
+function pushHistory(item) {
+  state.history.unshift(item);
+  state.history = state.history.slice(0, 50);
+  try {
+    localStorage.setItem(STORE.hist, JSON.stringify(state.history));
+  } catch (e) { /* 超配额忽略 */ }
+  renderHistory();
+}
+
+function renderHistory() {
+  const list = $('histList');
+  $('histCount').textContent = t('hist.count', { n: state.history.length });
+
+  if (!state.history.length) {
+    list.innerHTML = '<div class="stage-empty">' + t('hist.empty') + '</div>';
+    return;
+  }
+
+  list.innerHTML = state.history.map((h, i) => {
+    const time = new Intl.DateTimeFormat(currentLang, {
+      month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+    }).format(new Date(h.at));
+
+    const thumb = h.type === 'image'
+      ? '<img class="hist-thumb" src="' + h.url + '" alt="">'
+      : h.type === 'audio'
+        ? '<div class="hist-thumb aud">♪</div>'
+        : h.type === 'video'
+          ? '<div class="hist-thumb vid">▶</div>'
+          : '<div class="hist-thumb txt">T</div>';
+
+    const sub = h.type === 'image'
+      ? h.model + ' · ' + h.size + ' · seed ' + h.seed
+      : h.type === 'audio'
+        ? h.model + ' · ' + (h.size || '')
+        : h.type === 'video'
+          ? h.model + ' · ' + h.size + ' · ' + (h.duration || '') + 's'
+          : h.model + ' · ' + escapeHtml(h.reply || '');
+
+    return '<div class="hist-item">' + thumb +
+      '<div class="hist-info">' +
+        '<div class="hist-prompt">' + escapeHtml(h.prompt) + '</div>' +
+        '<div class="hist-sub">' + sub + '</div>' +
+        '<div class="hist-time">' + time + '</div>' +
+      '</div>' +
+      '<button class="btn tiny" data-reuse="' + i + '">' + t('hist.reuse') + '</button>' +
+    '</div>';
+  }).join('');
+}
+
+function reuseHistory(i) {
+  const h = state.history[i];
+  if (!h) return;
+  if (h.type === 'image') {
+    $('imgPrompt').value = h.prompt;
+    if (h.seed != null) $('imgSeed').value = h.seed;
+    switchTab('image');
+  } else if (h.type === 'audio') {
+    $('audText').value = h.prompt;
+    switchTab('audio');
+  } else if (h.type === 'video') {
+    $('vidPrompt').value = h.prompt;
+    switchTab('video');
+  } else {
+    $('txtInput').value = h.prompt;
+    switchTab('text');
+  }
+  assistant.say('ast.tipSeed');
+}
+
+// ---------- 界面交互 ----------
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p =>
+    p.classList.toggle('active', p.id === 'panel-' + name));
+}
+
+function applyTheme(theme) {
+  // CSS 里 :root 已是深色，浅色靠 data-theme="light" 覆盖
+  document.documentElement.dataset.theme = theme;
+  localStorage.setItem(STORE.theme, theme);
+  $('themeBtn').textContent = theme === 'dark' ? '☀️' : '🌙';
+  $('themeBtn').title = t(theme === 'dark' ? 'top.toLight' : 'top.toDark');
+}
+
+function bindEvents() {
+  // 登录弹窗
+  $('loginSubmitBtn').addEventListener('click', doLogin);
+  $('anonBtn').addEventListener('click', doAnonymous);
+  $('logoutBtn').addEventListener('click', doLogout);
+  $('loginBtn').addEventListener('click', openLoginModal);
+  $('keyInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') doLogin();
+  });
+  $('keyToggle').addEventListener('click', () => {
+    const el = $('keyInput');
+    el.type = el.type === 'password' ? 'text' : 'password';
+  });
+
+  // 弹窗关闭
+  document.querySelectorAll('[data-close-modal]').forEach(btn => {
+    btn.addEventListener('click', closeLoginModal);
+  });
+  $('loginModal').querySelector('.modal-backdrop').addEventListener('click', closeLoginModal);
+
+  // 顶栏
+  $('langSelect').addEventListener('change', e => setLanguage(e.target.value));
+  $('themeBtn').addEventListener('click', () => {
+    applyTheme(document.documentElement.dataset.theme === 'light' ? 'dark' : 'light');
+  });
+
+  // 标签页
+  document.querySelectorAll('.tab').forEach(b =>
+    b.addEventListener('click', () => switchTab(b.dataset.tab)));
+
+  // 图片
+  $('imgBtn').addEventListener('click', () => generateImage(false));
+  $('againBtn').addEventListener('click', () => generateImage(true));
+  $('dlBtn').addEventListener('click', downloadImage);
+  $('seedBtn').addEventListener('click', () => { $('imgSeed').value = randSeed(); });
+
+  // 音频
+  $('audBtn').addEventListener('click', () => generateAudio(false));
+  $('audAgain').addEventListener('click', () => generateAudio(true));
+  $('audDl').addEventListener('click', downloadAudio);
+
+  // 视频
+  $('vidBtn').addEventListener('click', () => generateVideo(false));
+  $('vidAgain').addEventListener('click', () => generateVideo(true));
+  $('vidDl').addEventListener('click', downloadVideo);
+  $('vidDur').addEventListener('input', e => {
+    $('vidDurVal').textContent = e.target.value;
+  });
+
+  // 文本
+  $('sendBtn').addEventListener('click', sendMessage);
+  $('stopBtn').addEventListener('click', () => state.abort && state.abort.abort());
+  $('clearBtn').addEventListener('click', () => { state.messages = []; renderChat(); });
+  $('txtTemp').addEventListener('input', e => { $('tempVal').textContent = e.target.value; });
+
+  const ta = $('txtInput');
+  ta.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+  ta.addEventListener('input', () => {
+    ta.style.height = 'auto';
+    ta.style.height = Math.min(ta.scrollHeight, 140) + 'px';
+  });
+
+  // 复制回复
+  $('chatBox').addEventListener('click', e => {
+    const btn = e.target.closest('[data-copy]');
+    if (!btn) return;
+    const msg = state.messages[Number(btn.dataset.copy)];
+    navigator.clipboard.writeText(msg.content).then(() => toast(t('txt.copied')));
+  });
+
+  // 历史
+  $('histList').addEventListener('click', e => {
+    const btn = e.target.closest('[data-reuse]');
+    if (btn) reuseHistory(Number(btn.dataset.reuse));
+  });
+  $('histClear').addEventListener('click', () => {
+    state.history = [];
+    localStorage.removeItem(STORE.hist);
+    renderHistory();
+  });
+
+  // 助手
+  $('mascotBtn').addEventListener('click', () => assistant.tip());
+  makeMascotDraggable();
+
+  // 图生图模式切换
+  $('imgModeGen').addEventListener('click', () => {
+    $('imgModeGen').classList.add('active');
+    $('imgModeEdit').classList.remove('active');
+    $('imgEditInput').classList.add('hidden');
+  });
+  $('imgModeEdit').addEventListener('click', () => {
+    $('imgModeEdit').classList.add('active');
+    $('imgModeGen').classList.remove('active');
+    $('imgEditInput').classList.remove('hidden');
+  });
+
+  // 图片上传
+  const uploadArea = $('imgUploadArea');
+  const fileInput = document.createElement('input');
+  fileInput.type = 'file';
+  fileInput.accept = 'image/*';
+  fileInput.style.display = 'none';
+  uploadArea.appendChild(fileInput);
+  uploadArea.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => handleImgUpload(e.target.files[0]));
+  uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.style.borderColor = 'var(--accent)'; });
+  uploadArea.addEventListener('dragleave', () => { uploadArea.style.borderColor = ''; });
+  uploadArea.addEventListener('drop', e => {
+    e.preventDefault();
+    uploadArea.style.borderColor = '';
+    if (e.dataTransfer.files[0]) handleImgUpload(e.dataTransfer.files[0]);
+  });
+
+  // 图片格式转换
+  const convFileInput = document.createElement('input');
+  convFileInput.type = 'file';
+  convFileInput.accept = 'image/*';
+  convFileInput.style.display = 'none';
+  $('convDrop').appendChild(convFileInput);
+  $('convDrop').addEventListener('click', () => convFileInput.click());
+  convFileInput.addEventListener('change', e => handleConvUpload(e.target.files[0]));
+  $('convDrop').addEventListener('dragover', e => { e.preventDefault(); $('convDrop').classList.add('dragover'); });
+  $('convDrop').addEventListener('dragleave', () => $('convDrop').classList.remove('dragover'));
+  $('convDrop').addEventListener('drop', e => {
+    e.preventDefault();
+    $('convDrop').classList.remove('dragover');
+    if (e.dataTransfer.files[0]) handleConvUpload(e.dataTransfer.files[0]);
+  });
+  $('convFormat').addEventListener('change', e => {
+    $('convQualityRow').classList.toggle('hidden', e.target.value === 'png');
+  });
+  $('convQuality').addEventListener('input', e => { $('convQVal').textContent = e.target.value; });
+  $('convBtn').addEventListener('click', convertImage);
+
+  // 语言切换后重绘动态内容
+  document.addEventListener('langchange', () => {
+    renderChat();
+    renderHistory();
+    updateBadge();
+    updateNeedKeyVisibility();
+    $('themeBtn').title = t(state.theme === 'dark' ? 'top.toLight' : 'top.toDark');
+  });
+
+  ['click', 'keydown'].forEach(ev =>
+    document.addEventListener(ev, () => assistant.resetIdle(), { passive: true }));
+}
+
+// ---------- 助手拖动 ----------
+
+function makeMascotDraggable() {
+  const mascot = $('mascotBtn');
+  const container = $('assistant');
+  let dragging = false, moved = false;
+  let startX, startY, origX, origY;
+
+  // 恢复位置
+  const saved = localStorage.getItem(STORE.mascot);
+  if (saved) {
+    try {
+      const pos = JSON.parse(saved);
+      container.style.right = 'auto';
+      container.style.bottom = 'auto';
+      container.style.left = pos.x + 'px';
+      container.style.top = pos.y + 'px';
+    } catch (_) {}
+  }
+
+  function onDown(e) {
+    dragging = true; moved = false;
+    const pt = e.touches ? e.touches[0] : e;
+    const rect = container.getBoundingClientRect();
+    startX = pt.clientX;
+    startY = pt.clientY;
+    origX = rect.left;
+    origY = rect.top;
+    container.classList.add('dragging');
+    e.preventDefault();
+  }
+
+  function onMove(e) {
+    if (!dragging) return;
+    const pt = e.touches ? e.touches[0] : e;
+    const dx = pt.clientX - startX;
+    const dy = pt.clientY - startY;
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
+
+    const maxX = window.innerWidth - 60;
+    const maxY = window.innerHeight - 60;
+    const nx = Math.max(0, Math.min(maxX, origX + dx));
+    const ny = Math.max(0, Math.min(maxY, origY + dy));
+
+    container.style.right = 'auto';
+    container.style.bottom = 'auto';
+    container.style.left = nx + 'px';
+    container.style.top = ny + 'px';
+  }
+
+  function onUp() {
+    if (!dragging) return;
+    dragging = false;
+    container.classList.remove('dragging');
+    if (moved) {
+      const rect = container.getBoundingClientRect();
+      localStorage.setItem(STORE.mascot, JSON.stringify({ x: rect.left, y: rect.top }));
+    }
+  }
+
+  mascot.addEventListener('mousedown', onDown);
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+  mascot.addEventListener('touchstart', onDown, { passive: false });
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onUp);
+}
+
+// ---------- 图生图上传处理 ----------
+
+async function handleImgUpload(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const area = $('imgUploadArea');
+  area.innerHTML = '<div class="spinner" style="width:24px;height:24px"></div>';
+  try {
+    const raw = await fileToDataURL(file);
+    const resized = await resizeImage(raw, 768);
+    imgEditImageData = resized;
+    area.classList.add('has-image');
+    area.innerHTML = '<img src="' + resized + '" alt="input"><br><span style="font-size:12px;color:var(--text-soft)" data-i18n="img.changeImage">点击更换</span>';
+  } catch (_) {
+    area.innerHTML = t('img.uploadFail');
+  }
+}
+
+// ---------- 图片格式转换 ----------
+
+let convImageData = null;
+
+async function handleConvUpload(file) {
+  if (!file || !file.type.startsWith('image/')) return;
+  const drop = $('convDrop');
+  drop.innerHTML = '<div class="spinner"></div>';
+  try {
+    const dataUrl = await fileToDataURL(file);
+    convImageData = dataUrl;
+    drop.classList.add('dragover');
+    drop.innerHTML = '<img src="' + dataUrl + '" alt="preview">';
+    $('convPreview').classList.remove('hidden');
+  } catch (_) {
+    drop.innerHTML = t('tool.convertFail');
+  }
+}
+
+function convertImage() {
+  if (!convImageData) return;
+  const format = $('convFormat').value;
+  const quality = Number($('convQuality').value) / 100;
+  const img = new Image();
+  img.onload = () => {
+    const c = document.createElement('canvas');
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    const mime = format === 'png' ? 'image/png'
+      : format === 'jpeg' ? 'image/jpeg' : 'image/webp';
+    c.toBlob(blob => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'converted.' + format;
+      a.click();
+      URL.revokeObjectURL(url);
+      toast(t('tool.done'));
+    }, mime, format === 'png' ? undefined : quality);
+  };
+  img.src = convImageData;
+}
+
+// ---------- 启动 ----------
+
+function init() {
+  // 深色是默认主题，只有浅色才需要写 data-theme
+  applyTheme(localStorage.getItem(STORE.theme) || 'dark');
+  $('langSelect').value = currentLang;
+  applyLanguage();
+  bindEvents();
+
+  try {
+    state.history = JSON.parse(localStorage.getItem(STORE.hist) || '[]');
+  } catch (e) {
+    state.history = [];
+  }
+
+  $('imgSeed').value = randSeed();
+
+  // 已保存过 Key 或选过匿名，直接进主界面
+  const saved = localStorage.getItem(STORE.key);
+  if (saved) {
+    state.apiKey = saved;
+    state.anonymous = false;
+    enterApp();
+    // 后台静默复核：Key 若已失效/过期，退回登录页而不是一直报错
+    verifyKey(saved).then(r => {
+      if (r === 'invalid') {
+        localStorage.removeItem(STORE.key);
+        state.apiKey = '';
+        state.anonymous = false;
+        updateBadge();
+        $('loginBtn').classList.remove('hidden');
+        $('logoutBtn').classList.add('hidden');
+        openLoginModal();
+        $('loginMsg').className = 'login-msg err';
+        $('loginMsg').textContent = t('login.fail');
+      } else if (r === 'ok') {
+        updateBadge();
+      }
+    });
+  } else if (localStorage.getItem(STORE.anon)) {
+    state.anonymous = true;
+    enterApp();
+  } else {
+    // 首次进入：显示 app 内容 + 登录弹窗
+    openLoginModal();
+  }
+}
+
+document.addEventListener('DOMContentLoaded', init);

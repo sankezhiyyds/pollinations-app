@@ -1,0 +1,516 @@
+// 多语言包：新增语言只需在 LOCALES 里加一份，并在 index.html 的 langSelect 加 option
+const SUPPORTED = ['zh', 'en', 'ja'];
+
+const LOCALES = {
+  zh: {
+    'app.title': 'Pollinations 工坊',
+    'login.title': 'Pollinations 工坊',
+    'login.desc': '用你自己的 API Key 登录，Key 只存在你的浏览器里，不会上传到任何第三方服务器。',
+    'login.placeholder': '粘贴你的 API Key（sk_ 或 pk_ 开头）',
+    'login.show': '显示 / 隐藏',
+    'login.remember': '在本机记住这个 Key',
+    'login.submit': '验证并进入',
+    'login.anon': '先匿名试用（有速率限制）',
+    'login.getkey': '还没有 Key？点此获取',
+    'login.privacy': 'Key 不会上传到任何第三方服务器',
+    'login.empty': '请先填入 API Key',
+    'login.apiProvider': '后端 API',
+    'login.customEndpoint': '自定义 Endpoint',
+    'login.customEndpointPh': 'https://your-api-endpoint.com/v1',
+    'login.customEndpointNote': '仅支持 OpenAI 兼容接口（/v1/chat/completions 等）',
+    'login.checking': '正在验证…',
+    'login.ok': '验证通过，正在进入…',
+    'login.fail': '验证失败：Key 无效或已过期',
+    'login.neterr': '网络异常，请检查连接后重试',
+    'login.anonNote': '已进入匿名模式，速率约 15 秒 1 次',
+
+    'header.lang': '界面语言',
+    'header.theme': '切换深浅色',
+    'top.toLight': '切换到浅色',
+    'top.toDark': '切换到深色',
+    'header.logout': '退出',
+    'header.login': '登录',
+    'tier.key': '已登录',
+    'tier.anon': '匿名',
+
+    'nav.image': '图片生成',
+    'nav.text': '文本对话',
+    'nav.audio': '语音合成',
+    'nav.video': '视频生成',
+    'nav.tools': '工具箱',
+    'nav.history': '历史记录',
+
+    'need.key': '该功能需要 API Key，匿名模式不可用',
+
+    'aud.text': '要朗读的文本',
+    'aud.textPh': '你好，欢迎使用 Pollinations Studio。来试试看吧！',
+    'aud.model': '模型',
+    'aud.voice': '音色',
+    'aud.format': '输出格式',
+    'aud.instructions': '情绪 / 风格',
+    'aud.instructionsPh': '温柔、缓慢、像在耳边低语',
+    'aud.generate': '生成语音',
+    'aud.generating': '正在合成…',
+    'aud.empty': '生成的语音会出现在这里',
+    'aud.download': '下载',
+    'aud.again': '重新生成',
+    'aud.needText': '先写点要说的话吧',
+    'aud.done': '语音生成完成',
+    'aud.fail': '生成失败,请换个文本或检查模型是否支持',
+    'aud.rate': '请求太频繁了,稍等一下再试',
+
+    'vid.prompt': '提示词',
+    'vid.promptPh': '一只柴犬在樱花树下奔跑,电影镜头感',
+    'vid.model': '模型',
+    'vid.resolution': '分辨率',
+    'vid.duration': '时长(秒)',
+    'vid.ratio': '画面比例',
+    'vid.audio': '生成配音',
+    'vid.cost': '视频按秒计费,生成较慢,请耐心等待',
+    'vid.generate': '生成视频',
+    'vid.generating': '正在渲染…可能需要几十秒',
+    'vid.empty': '生成的视频会出现在这里',
+    'vid.download': '下载',
+    'vid.again': '重新生成',
+    'vid.needPrompt': '先写个提示词吧',
+    'vid.done': '视频生成完成',
+    'vid.fail': '生成失败,换个提示词或检查 Key 额度',
+    'vid.rate': '请求太频繁了,视频很慢,等一会儿再来',
+
+    'ast.firstAudio': '试试生成一段语音,可以当播客片头用',
+    'ast.firstVideo': 'AI 做视频挺酷,输入简短描述就行',
+    'ast.audioDone': '声音出炉了!{s} 秒',
+    'ast.videoDone': '片子里有声有画,花 {s} 秒',
+
+    'img.prompt': '提示词',
+    'img.promptPh': '一只戴着宇航头盔的柴犬，赛博朋克霓虹街道',
+    'img.model': '模型',
+    'img.ratio': '尺寸',
+    'img.seed': '随机种子',
+    'img.random': '随机一个种子',
+    'img.nologo': '去水印',
+    'img.enhance': '增强提示词',
+    'img.private': '不进公共流',
+    'img.generate': '生成图片',
+    'img.generating': '正在生成…',
+    'img.empty': '生成的图片会出现在这里',
+    'img.download': '下载',
+    'img.again': '换一张',
+    'img.needPrompt': '先写点提示词吧',
+    'img.needImage': '请先上传一张图片',
+    'img.modeGen': '文生图',
+    'img.modeEdit': '图生图',
+    'img.uploadHint': '点击或拖入图片',
+    'img.changeImage': '点击更换',
+    'img.uploadFail': '图片加载失败',
+    'img.done': '生成完成',
+    'img.fail': '生成失败，换个提示词或稍后再试',
+    'img.rate': '请求太频繁了，匿名模式约 15 秒只能生成 1 张，稍等一下再试',
+    'img.seedreamNote': 'seedream 模型要求最小 960×960，已自动调整',
+
+    'txt.model': '模型',
+    'txt.temp': '温度',
+    'txt.system': '系统提示词',
+    'txt.systemPh': '你是一个简洁友好的助手。',
+    'txt.empty': '开始你的第一句话吧',
+    'txt.inputPh': '输入消息，Enter 发送 / Shift+Enter 换行',
+    'txt.send': '发送',
+    'txt.stop': '停止',
+    'txt.clear': '清空',
+    'txt.thinking': '思考中…',
+    'txt.fail': '回复失败，请稍后重试',
+    'txt.rate': '请求太频繁了，稍等几秒再发。登录自己的 Key 可以放宽限制',
+    'txt.stopped': '已停止生成',
+    'txt.copy': '复制',
+    'txt.copied': '已复制',
+
+    'hist.clear': '清空历史',
+    'hist.empty': '还没有记录',
+    'hist.count': '共 {n} 条记录',
+    'hist.reuse': '再次使用',
+
+    'tool.convertTitle': '图片格式转换',
+    'tool.convertHint': '点击或拖入图片',
+    'tool.format': '输出格式',
+    'tool.quality': '质量',
+    'tool.convert': '转换并下载',
+    'tool.done': '已下载',
+    'tool.convertFail': '图片加载失败',
+
+    'ast.welcome': '嗨！我是小花，有事随时点我～',
+    'ast.firstImage': '试着描述光线和材质，出图会更好看哦',
+    'ast.imgStart': '正在画啦，稍等一下～',
+    'ast.imgDone': '搞定！花了 {s} 秒',
+    'ast.imgSlow': '这张有点慢（{s} 秒），可以试试 turbo 模型',
+    'ast.imgFail': '这次没成功，换个说法再试试？',
+    'ast.rate': '慢一点啦～服务器让我们等几秒再来',
+    'ast.textDone': '回答好了，还想追问什么？',
+    'ast.tipSeed': '想复现同一张图？把种子记下来就行',
+    'ast.tipRatio': '换个尺寸试试，竖版更适合人像哦',
+    'ast.tipEnhance': '打开「增强提示词」，我会帮你补细节',
+    'ast.tipModel': '不同模型风格差别很大，多试几个',
+    'ast.idle': '有点安静呀，要不要生成点什么？'
+  },
+
+  en: {
+    'app.title': 'Pollinations Studio',
+    'login.title': 'Pollinations Studio',
+    'login.desc': 'Sign in with your own API key. It stays in your browser and is never sent to any third-party server.',
+    'login.placeholder': 'Paste your API key (sk_ or pk_)',
+    'login.show': 'Show / hide',
+    'login.remember': 'Remember this key on this device',
+    'login.submit': 'Verify & enter',
+    'login.anon': 'Try anonymously (rate limited)',
+    'login.getkey': 'No key yet? Get one here',
+    'login.privacy': 'Your key never leaves this device',
+    'login.empty': 'Please enter an API key first',
+    'login.apiProvider': 'API Provider',
+    'login.customEndpoint': 'Custom Endpoint',
+    'login.customEndpointPh': 'https://your-api-endpoint.com/v1',
+    'login.customEndpointNote': 'Only OpenAI-compatible endpoints (/v1/chat/completions, etc.)',
+    'login.checking': 'Verifying…',
+    'login.ok': 'Verified, entering…',
+    'login.fail': 'Verification failed: invalid or expired key',
+    'login.neterr': 'Network error, please retry',
+    'login.anonNote': 'Anonymous mode: about 1 request per 15s',
+
+    'header.lang': 'Language',
+    'header.theme': 'Toggle theme',
+    'top.toLight': 'Switch to light',
+    'top.toDark': 'Switch to dark',
+    'header.logout': 'Sign out',
+    'header.login': 'Sign in',
+    'tier.key': 'Signed in',
+    'tier.anon': 'Anonymous',
+
+    'nav.image': 'Image',
+    'nav.text': 'Chat',
+    'nav.audio': 'Speech',
+    'nav.video': 'Video',
+    'nav.tools': 'Tools',
+    'nav.history': 'History',
+
+    'need.key': 'Requires API Key — not available in anonymous mode',
+
+    'aud.text': 'Text to read',
+    'aud.textPh': 'Hello and welcome to Pollinations Studio! Give it a try.',
+    'aud.model': 'Model',
+    'aud.voice': 'Voice',
+    'aud.format': 'Format',
+    'aud.instructions': 'Emotion / style',
+    'aud.instructionsPh': 'gentle, slow, as if whispering',
+    'aud.generate': 'Generate speech',
+    'aud.generating': 'Synthesizing…',
+    'aud.empty': 'The audio will appear here',
+    'aud.download': 'Download',
+    'aud.again': 'Regenerate',
+    'aud.needText': 'Type some text first',
+    'aud.done': 'Done',
+    'aud.fail': 'Failed, try another prompt or different model',
+    'aud.rate': 'Too many requests. Wait a moment.',
+
+    'vid.prompt': 'Prompt',
+    'vid.promptPh': 'A shiba inu running under cherry blossom trees, cinematic',
+    'vid.model': 'Model',
+    'vid.resolution': 'Resolution',
+    'vid.duration': 'Duration (s)',
+    'vid.ratio': 'Aspect ratio',
+    'vid.audio': 'Include audio',
+    'vid.cost': 'Video is billed per second and takes a while',
+    'vid.generate': 'Generate video',
+    'vid.generating': 'Rendering… could take a minute',
+    'vid.empty': 'The video will appear here',
+    'vid.download': 'Download',
+    'vid.again': 'Reroll',
+    'vid.needPrompt': 'Write a prompt first',
+    'vid.done': 'Done',
+    'vid.fail': 'Failed, retry with another prompt or check your balance',
+    'vid.rate': 'Too many requests. Videos are slow — wait a moment.',
+
+    'img.prompt': 'Prompt',
+    'img.promptPh': 'A shiba inu wearing an astronaut helmet, cyberpunk neon street',
+    'img.model': 'Model',
+    'img.ratio': 'Size',
+    'img.seed': 'Seed',
+    'img.random': 'Randomize seed',
+    'img.nologo': 'No logo',
+    'img.enhance': 'Enhance prompt',
+    'img.private': 'Keep private',
+    'img.generate': 'Generate',
+    'img.generating': 'Generating…',
+    'img.empty': 'Your image will appear here',
+    'img.download': 'Download',
+    'img.again': 'Reroll',
+    'img.needPrompt': 'Write a prompt first',
+    'img.needImage': 'Please upload an image first',
+    'img.modeGen': 'Text→Image',
+    'img.modeEdit': 'Image→Image',
+    'img.uploadHint': 'Click or drop an image',
+    'img.changeImage': 'Click to change',
+    'img.uploadFail': 'Image load failed',
+    'img.done': 'Done',
+    'img.fail': 'Failed, try another prompt or retry later',
+    'img.rate': 'Too many requests. Anonymous mode allows ~1 image per 15s. Please wait a moment.',
+    'img.seedreamNote': 'seedream requires at least 960×960, size adjusted',
+
+    'txt.model': 'Model',
+    'txt.temp': 'Temperature',
+    'txt.system': 'System prompt',
+    'txt.systemPh': 'You are a concise, friendly assistant.',
+    'txt.empty': 'Say something to start',
+    'txt.inputPh': 'Type a message. Enter to send, Shift+Enter for newline',
+    'txt.send': 'Send',
+    'txt.stop': 'Stop',
+    'txt.clear': 'Clear',
+    'txt.thinking': 'Thinking…',
+    'txt.fail': 'Request failed, please retry',
+    'txt.rate': 'Too many requests. Wait a few seconds. Signing in with your own key raises the limit.',
+    'txt.stopped': 'Generation stopped',
+    'txt.copy': 'Copy',
+    'txt.copied': 'Copied',
+
+    'hist.clear': 'Clear history',
+    'hist.empty': 'Nothing here yet',
+    'hist.count': '{n} item(s)',
+    'hist.reuse': 'Reuse',
+
+    'tool.convertTitle': 'Image Format Converter',
+    'tool.convertHint': 'Click or drop an image',
+    'tool.format': 'Output format',
+    'tool.quality': 'Quality',
+    'tool.convert': 'Convert & download',
+    'tool.done': 'Downloaded',
+    'tool.convertFail': 'Image load failed',
+
+    'need.key': 'Requires API Key — not available in anonymous mode',
+
+    'ast.firstAudio': 'Try generating speech — could be a podcast intro',
+    'ast.firstVideo': 'AI video is pretty cool, a short description is enough',
+    'ast.audioDone': 'Voice ready! {s}s',
+    'ast.videoDone': 'Done in {s}s',
+
+    'ast.welcome': "Hi! I'm Blossom. Tap me anytime.",
+    'ast.firstImage': 'Describe lighting and material for better results',
+    'ast.imgStart': 'Painting now, hold on…',
+    'ast.imgDone': 'Done! Took {s}s',
+    'ast.imgSlow': 'That was slow ({s}s). Try the turbo model',
+    'ast.imgFail': "Didn't work. Rephrase and retry?",
+    'ast.rate': 'Easy there~ the server wants us to wait a few seconds.',
+    'ast.textDone': 'Answered! Anything else?',
+    'ast.tipSeed': 'Want the same image again? Keep the seed',
+    'ast.tipRatio': 'Try another size — portrait suits people better',
+    'ast.tipEnhance': 'Turn on "Enhance prompt" and I will add details',
+    'ast.tipModel': 'Models differ a lot in style. Try a few',
+    'ast.idle': "It's quiet here. Generate something?"
+  },
+
+  ja: {
+    'app.title': 'Pollinations スタジオ',
+    'login.title': 'Pollinations スタジオ',
+    'login.desc': '自分の API キーでログインします。キーはブラウザ内にのみ保存され、外部に送信されません。',
+    'login.placeholder': 'API キーを貼り付け（sk_ または pk_）',
+    'login.show': '表示 / 非表示',
+    'login.remember': 'この端末にキーを保存する',
+    'login.submit': '確認して開始',
+    'login.anon': '匿名で試す（レート制限あり）',
+    'login.getkey': 'キーをまだ持っていない場合はこちら',
+    'login.privacy': 'キーは端末外に送信されません',
+    'login.empty': 'まず API キーを入力してください',
+    'login.apiProvider': 'API プロバイダ',
+    'login.customEndpoint': 'カスタムエンドポイント',
+    'login.customEndpointPh': 'https://your-api-endpoint.com/v1',
+    'login.customEndpointNote': 'OpenAI互換エンドポイントのみ対応（/v1/chat/completions 等）',
+    'login.checking': '確認中…',
+    'login.ok': '確認できました。移動します…',
+    'login.fail': '確認失敗：キーが無効か期限切れです',
+    'login.neterr': 'ネットワークエラー。再試行してください',
+    'login.anonNote': '匿名モード：約15秒に1回',
+
+    'header.lang': '言語',
+    'header.theme': 'テーマ切替',
+    'top.toLight': 'ライトへ切替',
+    'top.toDark': 'ダークへ切替',
+    'header.logout': 'ログアウト',
+    'header.login': 'ログイン',
+    'tier.key': 'ログイン中',
+    'tier.anon': '匿名',
+
+    'nav.image': '画像生成',
+    'nav.text': 'チャット',
+    'nav.audio': '音声合成',
+    'nav.video': '動画生成',
+    'nav.tools': 'ツール',
+    'nav.history': '履歴',
+
+    'need.key': 'API キーが必要です。匿名モードでは使えません',
+
+    'aud.text': '読み上げるテキスト',
+    'aud.textPh': 'こんにちは、Pollinations スタジオへようこそ！やってみてください',
+    'aud.model': 'モデル',
+    'aud.voice': '音声',
+    'aud.format': '出力形式',
+    'aud.instructions': '感情 / スタイル',
+    'aud.instructionsPh': '優しく、ゆっくり、ささやくように',
+    'aud.generate': '音声生成',
+    'aud.generating': '合成中…',
+    'aud.empty': '生成した音声がここに表示されます',
+    'aud.download': 'ダウンロード',
+    'aud.again': '再生成',
+    'aud.needText': 'まずはテキストを入力してください',
+    'aud.done': '完了',
+    'aud.fail': '失敗しました。別のテキストやモデルを試してください',
+    'aud.rate': 'リクエストが多すぎます。しばらく待ってください',
+
+    'vid.prompt': 'プロンプト',
+    'vid.promptPh': '桜の木の下を走る柴犬、シネマティックな映画作り',
+    'vid.model': 'モデル',
+    'vid.resolution': '解像度',
+    'vid.duration': '長さ(秒)',
+    'vid.ratio': 'アスペクト比',
+    'vid.audio': '音声を生成',
+    'vid.cost': '動画は秒単位で課金され、生成に時間がかかります',
+    'vid.generate': '動画生成',
+    'vid.generating': 'レンダリング中…数分かかる場合があります',
+    'vid.empty': '生成した動画がここに表示されます',
+    'vid.download': 'ダウンロード',
+    'vid.again': '再生成',
+    'vid.needPrompt': 'まずはプロンプトを入力してください',
+    'vid.done': '完了',
+    'vid.fail': '失敗しました。別のプロンプトで再試行するか、残高を確認してください',
+    'vid.rate': 'リクエストが多すぎます。動画は特に時間がかかるので、しばらく待ってください',
+
+    'img.prompt': 'プロンプト',
+    'img.promptPh': '宇宙ヘルメットをかぶった柴犬、サイバーパンクのネオン街',
+    'img.model': 'モデル',
+    'img.ratio': 'サイズ',
+    'img.seed': 'シード',
+    'img.random': 'シードをランダム化',
+    'img.nologo': 'ロゴなし',
+    'img.enhance': 'プロンプト強化',
+    'img.private': '公開しない',
+    'img.generate': '生成',
+    'img.generating': '生成中…',
+    'img.empty': '生成した画像がここに表示されます',
+    'img.download': 'ダウンロード',
+    'img.again': 'もう一枚',
+    'img.needPrompt': 'まずプロンプトを入力してください',
+    'img.needImage': '画像をアップロードしてください',
+    'img.modeGen': 'テキスト→画像',
+    'img.modeEdit': '画像→画像',
+    'img.uploadHint': 'クリックまたは画像をドロップ',
+    'img.changeImage': 'クリックで変更',
+    'img.uploadFail': '画像の読み込みに失敗',
+    'img.done': '完了',
+    'img.fail': '失敗しました。別の表現で再試行してください',
+    'img.rate': 'リクエストが多すぎます。匿名モードは約15秒に1枚までです。少し待ってください',
+    'img.seedreamNote': 'seedream は最小 960×960 が必要なため調整しました',
+
+    'txt.model': 'モデル',
+    'txt.temp': '温度',
+    'txt.system': 'システムプロンプト',
+    'txt.systemPh': 'あなたは簡潔で親切なアシスタントです。',
+    'txt.empty': '最初のひとことを入力してください',
+    'txt.inputPh': 'メッセージを入力。Enter で送信 / Shift+Enter で改行',
+    'txt.send': '送信',
+    'txt.stop': '停止',
+    'txt.clear': 'クリア',
+    'txt.thinking': '考え中…',
+    'txt.fail': '失敗しました。再試行してください',
+    'txt.rate': 'リクエストが多すぎます。数秒待ってください。自分の Key でログインすると制限が緩くなります',
+    'txt.stopped': '生成を停止しました',
+    'txt.copy': 'コピー',
+    'txt.copied': 'コピーしました',
+
+    'hist.clear': '履歴を消す',
+    'hist.empty': 'まだ記録がありません',
+    'hist.count': '{n} 件',
+    'hist.reuse': '再利用',
+
+    'tool.convertTitle': '画像フォーマット変換',
+    'tool.convertHint': 'クリックまたは画像をドロップ',
+    'tool.format': '出力形式',
+    'tool.quality': '品質',
+    'tool.convert': '変換してダウンロード',
+    'tool.done': 'ダウンロード完了',
+    'tool.convertFail': '画像の読み込みに失敗',
+
+    'need.key': 'API キーが必要です。匿名モードでは使えません',
+
+    'ast.firstAudio': '音声を作ってみよう。ポッドキャストの導入みたいな使い方ができるよ',
+    'ast.firstVideo': 'AI 動画は cool だよ。短い説明だけで作れるんだ',
+    'ast.audioDone': 'できた！{s} 秒だったよ',
+    'ast.videoDone': 'できた！{s} 秒かかったね',
+
+    'ast.welcome': 'こんにちは！ハナだよ。いつでも押してね',
+    'ast.firstImage': '光と質感を書くと綺麗に出るよ',
+    'ast.imgStart': '描いてるところ、待ってて〜',
+    'ast.imgDone': 'できた！{s} 秒だったよ',
+    'ast.imgSlow': '少し遅かったね（{s} 秒）。turbo も試してみて',
+    'ast.imgFail': '今回はダメだった。言い方を変えてみる？',
+    'ast.rate': 'ちょっと待ってね〜サーバーが少し休憩してほしいみたい',
+    'ast.textDone': '答えたよ。ほかに聞きたいことある？',
+    'ast.tipSeed': '同じ絵をもう一度出すならシードを覚えておこう',
+    'ast.tipRatio': 'サイズを変えてみて。縦長は人物向きだよ',
+    'ast.tipEnhance': '「プロンプト強化」を入れると細部を足すよ',
+    'ast.tipModel': 'モデルごとに雰囲気が全然違うよ',
+    'ast.idle': '静かだね。何か作ってみない？'
+  }
+};
+
+// 语言判定优先级：localStorage > URL 参数 > 浏览器语言 > 兜底 en
+function detectLanguage() {
+  const saved = localStorage.getItem('pl_lang');
+  if (saved && SUPPORTED.includes(saved)) return saved;
+
+  const urlLang = new URLSearchParams(location.search).get('lang');
+  if (urlLang && SUPPORTED.includes(urlLang)) {
+    localStorage.setItem('pl_lang', urlLang);
+    return urlLang;
+  }
+
+  const list = navigator.languages && navigator.languages.length
+    ? navigator.languages
+    : [navigator.language || 'en'];
+  for (const raw of list) {
+    const base = raw.toLowerCase().split('-')[0];
+    if (SUPPORTED.includes(base)) return base;
+  }
+  return 'en';
+}
+
+let currentLang = detectLanguage();
+
+// 取翻译，支持 {n} / {s} 这类占位符替换
+function t(key, vars) {
+  const pack = LOCALES[currentLang] || LOCALES.en;
+  let str = pack[key] != null ? pack[key] : (LOCALES.en[key] != null ? LOCALES.en[key] : key);
+  if (vars) {
+    Object.keys(vars).forEach(k => {
+      str = str.replace(new RegExp('\\{' + k + '\\}', 'g'), vars[k]);
+    });
+  }
+  return str;
+}
+
+// 遍历 DOM 上的 data-i18n / data-i18n-ph / data-i18n-title 并落文案
+function applyLanguage() {
+  document.documentElement.lang = currentLang;
+  document.querySelectorAll('[data-i18n]').forEach(el => {
+    el.textContent = t(el.dataset.i18n);
+  });
+  document.querySelectorAll('[data-i18n-ph]').forEach(el => {
+    el.placeholder = t(el.dataset.i18nPh);
+  });
+  document.querySelectorAll('[data-i18n-title]').forEach(el => {
+    el.title = t(el.dataset.i18nTitle);
+  });
+  document.title = t('app.title');
+  document.dispatchEvent(new CustomEvent('langchange', { detail: currentLang }));
+}
+
+function setLanguage(lang) {
+  if (!SUPPORTED.includes(lang)) return;
+  currentLang = lang;
+  localStorage.setItem('pl_lang', lang);
+  applyLanguage();
+}
