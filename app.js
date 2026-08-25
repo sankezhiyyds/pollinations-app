@@ -1113,8 +1113,10 @@ function bindEvents() {
     if (e.dataTransfer.files[0]) handleVconvUpload(e.dataTransfer.files[0]);
   });
   // 选 GIF 时隐藏质量档（GIF 走调色板两遍法，与 CRF 无关）
+  // WEBP 保留质量档（canvas toBlob quality），并显示"抽帧"说明
   $('vconvFormat').addEventListener('change', e => {
     $('vconvQualityRow').classList.toggle('hidden', e.target.value === 'gif');
+    $('vconvWebpTip').classList.toggle('hidden', e.target.value !== 'webp');
   });
   $('vconvBtn').addEventListener('click', convertVideo);
 
@@ -1279,19 +1281,29 @@ function convertImage() {
   img.src = convImageData;
 }
 
-// ---------- 视频格式转换（ffmpeg.wasm 单线程版，纯前端） ----------
+// ---------- 视频格式转换（ffmpeg.wasm 单线程，纯前端） ----------
+//
+// 技术决策说明（GitHub Pages 兼容性）：
+//   ffmpeg 单线程核心内部仍会 try new Worker(blobUrl)。blob: URL 由
+//   fetch(<remoteSrc>) 产生，部分浏览器（Safari/Chrome 隐私模式）的
+//   Tracking Prevention 会拦截跨域 blob worker。规避方案：
+//     1) 用 jsdelivr CDN 承载 @ffmpeg/core 脚本（unpkg 在 GH Pages 下
+//        常被拦，而且版本锁定更安全）
+//     2) 通过 blob URL <iframe> 隔离加载 FFmpegWASM / FFmpegUtil，避免
+//        主文档 CSP 影响 worker 脚本的加载上下文
+//   @ffmpeg/core@0.12.6 单文件 worker（不带 -mp 后缀）不需要 SharedArrayBuffer，
+//   COOP/COEP 头完全不需要，直接在 GitHub Pages 静态页跑通。
+//
+// 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧预览/导出）
 
-// ffmpeg.wasm 单线程核心不依赖 SharedArrayBuffer，无需 COOP/COEP 头，
-// 在 GitHub Pages 上可直接运行。首次使用按需加载约 30MB 引擎。
 const FFMPEG_CFG = {
-  ffmpegJS: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
-  utilJS: 'https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js',
-  coreBase: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+  coreBase: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd'
 };
 
 let ffmpegInstance = null;
 let ffmpegLoading = null;
 let vconvFile = null;
+let _ffmpegNonce = '';
 
 function loadScript(src) {
   return new Promise((resolve, reject) => {
@@ -1303,22 +1315,58 @@ function loadScript(src) {
   });
 }
 
+// 把 src 抓成 blob URL（同源 context 下可被 Worker 安全加载）
+async function toBlobUrl(src) {
+  const resp = await fetch(src);
+  if (!resp.ok) throw new Error('fetch failed: ' + src);
+  const blob = await resp.blob();
+  return URL.createObjectURL(blob);
+}
+
 async function loadFFmpeg() {
   if (ffmpegInstance) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
 
-  ffmpegLoading = (async () => {
-    // 串行加载两个 UMD 包，全局名为 FFmpegWASM / FFmpegUtil
-    await loadScript(FFMPEG_CFG.ffmpegJS);
-    await loadScript(FFMPEG_CFG.utilJS);
+  // 生成一个随机的 nonce，让 blob iframe worker 脚本不会命中缓存
+  _ffmpegNonce = Math.random().toString(36).slice(2, 10);
 
-    const { FFmpeg } = window.FFmpegWASM;
-    const { toBlobURL } = window.FFmpegUtil;
+  ffmpegLoading = (async () => {
+    // 用 iframe + blob URL 构造一个干净的上下文：
+    //   - 这个上下文的 document.baseURI 就是 blob:，子资源也走 blob: 路径
+    //   - FFmpegWASM / FFmpegUtil 两个 UMD 模块在此上下文中执行，全局名可见
+    const iframe = document.createElement('iframe');
+    iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;';
+    iframe.setAttribute('sandbox', 'allow-scripts allow-modals');
+    document.body.appendChild(iframe);
+
+    // 加载两个 UMD 包到 iframe 上下文
+    const scripts = [
+      `https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js`,
+      `https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js`
+    ];
+    const blobUrls = await Promise.all(scripts.map(toBlobUrl));
+    const html = `<script src="${blobUrls[0]}"></script>` +
+                 `<script src="${blobUrls[1]}"></script>` +
+                 `<script>window.__ffReady=true;</script>`;
+    iframe.srcdoc = html;
+
+    await new Promise((resolve, reject) => {
+      const t = setTimeout(() => reject(new Error('iframe timeout')), 30000);
+      iframe.addEventListener('load', () => {
+        clearTimeout(t);
+        resolve();
+      });
+    });
+
+    // 主窗口拿到全局变量（iframe 与主窗口共享 window，但脚本挂在 iframe 内）
+    const { FFmpeg } = iframe.contentWindow.FFmpegWASM;
+    const { toBlobURL } = iframe.contentWindow.FFmpegUtil;
+
+    document.body.removeChild(iframe);
 
     const ffmpeg = new FFmpeg();
-    // toBlobURL 把远程脚本/wasm 抓成 blob: URL，规避 worker 跨域与 MIME 限制
     const coreURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js', 'text/javascript');
-    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.wasm', 'application/wasm');
+    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js?nonce=' + _ffmpegNonce, 'application/wasm');
 
     await ffmpeg.load({ coreURL, wasmURL });
     ffmpegInstance = ffmpeg;
@@ -1374,6 +1422,7 @@ async function convertVideo() {
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
     //   webm - libvpx-vp9 + libopus，CRF 同上语义
     //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
+    //   webp - 抽帧导出单张 WebP（Canvas API 原生支持，无需 ffmpeg）
     let args;
     if (format === 'gif') {
       // 两遍法：先生成调色板，再用调色板转 gif，能显著减少色阶断层/马赛克
@@ -1387,6 +1436,30 @@ async function convertVideo() {
       args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-crf', crf, '-b:v', '0',
               '-c:a', 'libopus', '-pix_fmt', 'yuv420p', outputName];
       await ffmpeg.exec(...args);
+    } else if (format === 'webp') {
+      // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
+      const frameName = 'frame.jpg';
+      await ffmpeg.exec('-i', inputName, '-frames:v', '1', '-q:v', '5', frameName);
+      const frameData = await ffmpeg.readFile(frameName);
+      try { await ffmpeg.deleteFile(frameName); } catch (_) {}
+      const img = await blobToImage(new Blob([frameData.buffer || frameData]));
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth;
+      c.height = img.naturalHeight;
+      c.getContext('2d').drawImage(img, 0, 0);
+      const quality = Number($('vconvQuality').value) / 100;
+      const blob = await new Promise((resolve, reject) => {
+        c.toBlob(b => b ? resolve(b) : reject(new Error('canvas webp export failed')), 'image/webp', quality);
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'frame.webp';
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 2000);
+      hint.textContent = '';
+      toast(t('tool.done'));
+      return;
     } else {
       // mp4 / h.264：-pix_fmt yuv420p 保证浏览器可播；-movflags +faststart 改善流播
       args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium',
@@ -1418,6 +1491,16 @@ async function convertVideo() {
     btn.disabled = false;
     btn.textContent = t('tool.convert');
   }
+}
+
+// canvas.toBlob 接受 Blob 作回调参数（现代浏览器），此处额外提供 blob→Image 工具
+function blobToImage(blob) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(img.src); resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error('image decode failed')); };
+    img.src = URL.createObjectURL(blob);
+  });
 }
 
 // ---------- 启动 ----------
