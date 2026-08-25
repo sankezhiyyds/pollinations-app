@@ -1281,92 +1281,48 @@ function convertImage() {
   img.src = convImageData;
 }
 
-// ---------- 视频格式转换（ffmpeg.wasm 单线程，纯前端） ----------
+// ---------- 视频格式转换（ffmpeg.wasm，纯前端） ----------
 //
-// 技术决策说明（GitHub Pages 兼容性）：
-//   ffmpeg 单线程核心内部仍会 try new Worker(blobUrl)。blob: URL 由
-//   fetch(<remoteSrc>) 产生，部分浏览器（Safari/Chrome 隐私模式）的
-//   Tracking Prevention 会拦截跨域 blob worker。规避方案：
-//     1) 用 jsdelivr CDN 承载 @ffmpeg/core 脚本（unpkg 在 GH Pages 下
-//        常被拦，而且版本锁定更安全）
-//     2) 通过 blob URL <iframe> 隔离加载 FFmpegWASM / FFmpegUtil，避免
-//        主文档 CSP 影响 worker 脚本的加载上下文
-//   @ffmpeg/core@0.12.6 单文件 worker（不带 -mp 后缀）不需要 SharedArrayBuffer，
-//   COOP/COEP 头完全不需要，直接在 GitHub Pages 静态页跑通。
+// 技术决策（GitHub Pages + Tracking Prevention 兼容）：
+//   @ffmpeg/ffmpeg@0.12.x UMD 包内部会尝试 new Worker(blobUrl)，blobUrl 由
+//   fetch(<remoteSrc>) 产生，部分浏览器会拦截跨域 blob worker（SecurityError）。
+//   规避方案：改用 @ffmpeg/ffmpeg@0.11.6 ES Module build。
+//   0.11.x 的 ES Module 版本在检测到 Worker 不可用时完全 fallback 到主线程
+//   执行 WASM，不创建任何 Worker，从根本上规避 blob: URL 跨域拦截问题。
 //
-// 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧预览/导出）
+//   @ffmpeg/core@0.11.6 无需 SharedArrayBuffer，COOP/COEP 头不需要，
+//   纯静态 GitHub Pages 即可运行。
+//
+// 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧导出单张图）
 
 const FFMPEG_CFG = {
-  coreBase: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/umd'
+  ffmpegES: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js',
+  utilES:  'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.11.0/dist/util.min.js',
+  coreBase: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.6/dist/umd'
 };
 
 let ffmpegInstance = null;
 let ffmpegLoading = null;
 let vconvFile = null;
-let _ffmpegNonce = '';
-
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('script load failed: ' + src));
-    document.head.appendChild(s);
-  });
-}
-
-// 把 src 抓成 blob URL（同源 context 下可被 Worker 安全加载）
-async function toBlobUrl(src) {
-  const resp = await fetch(src);
-  if (!resp.ok) throw new Error('fetch failed: ' + src);
-  const blob = await resp.blob();
-  return URL.createObjectURL(blob);
-}
 
 async function loadFFmpeg() {
   if (ffmpegInstance) return ffmpegInstance;
   if (ffmpegLoading) return ffmpegLoading;
 
-  // 生成一个随机的 nonce，让 blob iframe worker 脚本不会命中缓存
-  _ffmpegNonce = Math.random().toString(36).slice(2, 10);
-
   ffmpegLoading = (async () => {
-    // 用 iframe + blob URL 构造一个干净的上下文：
-    //   - 这个上下文的 document.baseURI 就是 blob:，子资源也走 blob: 路径
-    //   - FFmpegWASM / FFmpegUtil 两个 UMD 模块在此上下文中执行，全局名可见
-    const iframe = document.createElement('iframe');
-    iframe.style.cssText = 'position:absolute;left:-9999px;top:-9999px;width:1px;height:1px;border:0;';
-    iframe.setAttribute('sandbox', 'allow-scripts allow-modals');
-    document.body.appendChild(iframe);
+    // 0.11.x ES Module 会把全局变量挂载到 window.FFmpegWASM / window.FFmpegUtil
+    await Promise.all([
+      import(/* webpackIgnore: true */ FFMPEG_CFG.ffmpegES),
+      import(/* webpackIgnore: true */ FFMPEG_CFG.utilES)
+    ]);
 
-    // 加载两个 UMD 包到 iframe 上下文
-    const scripts = [
-      `https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js`,
-      `https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/dist/umd/index.js`
-    ];
-    const blobUrls = await Promise.all(scripts.map(toBlobUrl));
-    const html = `<script src="${blobUrls[0]}"></script>` +
-                 `<script src="${blobUrls[1]}"></script>` +
-                 `<script>window.__ffReady=true;</script>`;
-    iframe.srcdoc = html;
-
-    await new Promise((resolve, reject) => {
-      const t = setTimeout(() => reject(new Error('iframe timeout')), 30000);
-      iframe.addEventListener('load', () => {
-        clearTimeout(t);
-        resolve();
-      });
-    });
-
-    // 主窗口拿到全局变量（iframe 与主窗口共享 window，但脚本挂在 iframe 内）
-    const { FFmpeg } = iframe.contentWindow.FFmpegWASM;
-    const { toBlobURL } = iframe.contentWindow.FFmpegUtil;
-
-    document.body.removeChild(iframe);
+    const { FFmpeg } = window.FFmpegWASM;
+    const { toBlobURL } = window.FFmpegUtil;
 
     const ffmpeg = new FFmpeg();
+    // toBlobURL 把核心脚本抓成 blob: URL，规避 MIME 与同源限制
     const coreURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js', 'text/javascript');
-    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js?nonce=' + _ffmpegNonce, 'application/wasm');
+    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.wasm', 'application/wasm');
 
     await ffmpeg.load({ coreURL, wasmURL });
     ffmpegInstance = ffmpeg;
