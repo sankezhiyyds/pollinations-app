@@ -1284,25 +1284,46 @@ function convertImage() {
 // ---------- 视频格式转换（ffmpeg.wasm，纯前端） ----------
 //
 // 技术决策（GitHub Pages + Tracking Prevention 兼容）：
-//   @ffmpeg/ffmpeg@0.12.x UMD 包内部会尝试 new Worker(blobUrl)，blobUrl 由
-//   fetch(<remoteSrc>) 产生，部分浏览器会拦截跨域 blob worker（SecurityError）。
-//   规避方案：改用 @ffmpeg/ffmpeg@0.11.6 ES Module build。
-//   0.11.x 的 ES Module 版本在检测到 Worker 不可用时完全 fallback 到主线程
-//   执行 WASM，不创建任何 Worker，从根本上规避 blob: URL 跨域拦截问题。
+//   @ffmpeg/ffmpeg@0.12.x 内部通过 new Worker(classWorkerURL) 加载 worker chunk。
+//   若 classWorkerURL 指向 CDN 的跨域地址，部分浏览器（Edge/Safari 的
+//   Tracking Prevention）会拦截跨域 Worker 构造，抛 SecurityError。
+//   规避方案：用 toBlobURL 预先把 worker chunk / core / wasm 三个远程文件
+//   fetch 成本地同源 blob: URL，再交给 ffmpeg.load()。同源 blob Worker 不会
+//   被隐私拦截，从根本上解决 “Failed to construct 'Worker'” 问题。
 //
-//   @ffmpeg/core@0.11.6 无需 SharedArrayBuffer，COOP/COEP 头不需要，
+//   @ffmpeg/core@0.12.10（单线程 UMD）无需 SharedArrayBuffer，不要求 COOP/COEP，
 //   纯静态 GitHub Pages 即可运行。
 //
 // 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧导出单张图）
 
 const FFMPEG_CFG = {
-  ffmpegES: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.11.6/dist/ffmpeg.min.js',
-  utilES:  'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.11.0/dist/util.min.js',
-  coreBase: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.11.6/dist/umd'
+  // 主类 UMD：加载后挂到 window.FFmpegWASM（含 FFmpeg 类）
+  ffmpegJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
+  // 工具 UMD：加载后挂到 window.FFmpegUtil（含 toBlobURL / fetchFile）
+  utilJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/umd/index.js',
+  // worker chunk：0.12.x 内部 new Worker 的目标，必须转成同源 blob 规避跨域拦截
+  workerURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js',
+  // 单线程 core（无 SharedArrayBuffer 依赖）
+  coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
+  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm'
 };
+
+// 动态注入 <script>，加载 UMD 包（幂等：同一 src 只加载一次）
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector('script[data-ffmpeg="' + src + '"]')) return resolve();
+    const s = document.createElement('script');
+    s.src = src;
+    s.dataset.ffmpeg = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('script load failed: ' + src));
+    document.head.appendChild(s);
+  });
+}
 
 let ffmpegInstance = null;
 let ffmpegLoading = null;
+let ffmpegFetchFile = null; // @ffmpeg/util 的 fetchFile，convertVideo 里复用
 let vconvFile = null;
 
 async function loadFFmpeg() {
@@ -1310,21 +1331,25 @@ async function loadFFmpeg() {
   if (ffmpegLoading) return ffmpegLoading;
 
   ffmpegLoading = (async () => {
-    // 0.11.x ES Module 会把全局变量挂载到 window.FFmpegWASM / window.FFmpegUtil
-    await Promise.all([
-      import(/* webpackIgnore: true */ FFMPEG_CFG.ffmpegES),
-      import(/* webpackIgnore: true */ FFMPEG_CFG.utilES)
-    ]);
+    // 1) 顺序加载两个 UMD 包，分别暴露 window.FFmpegWASM / window.FFmpegUtil
+    await loadScript(FFMPEG_CFG.ffmpegJS);
+    await loadScript(FFMPEG_CFG.utilJS);
 
     const { FFmpeg } = window.FFmpegWASM;
-    const { toBlobURL } = window.FFmpegUtil;
+    const { toBlobURL, fetchFile } = window.FFmpegUtil;
+    ffmpegFetchFile = fetchFile;
 
+    // 2) 把 worker / core / wasm 三个远程文件转成同源 blob: URL
+    //    —— 这一步是绕过 Tracking Prevention 跨域 Worker 拦截的关键
+    const [classWorkerURL, coreURL, wasmURL] = await Promise.all([
+      toBlobURL(FFMPEG_CFG.workerURL, 'text/javascript'),
+      toBlobURL(FFMPEG_CFG.coreURL, 'text/javascript'),
+      toBlobURL(FFMPEG_CFG.wasmURL, 'application/wasm')
+    ]);
+
+    // 3) 用同源 blob URL 初始化，内部 new Worker 也走同源 blob，不再被拦截
     const ffmpeg = new FFmpeg();
-    // toBlobURL 把核心脚本抓成 blob: URL，规避 MIME 与同源限制
-    const coreURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js', 'text/javascript');
-    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.wasm', 'application/wasm');
-
-    await ffmpeg.load({ coreURL, wasmURL });
+    await ffmpeg.load({ coreURL, wasmURL, classWorkerURL });
     ffmpegInstance = ffmpeg;
     return ffmpeg;
   })();
@@ -1370,9 +1395,9 @@ async function convertVideo() {
     const inputName = 'input.' + ext;
     const outputName = 'output.' + format;
 
-    // fetchFile 来自 @ffmpeg/util，会把 File/ABlob 读成 Uint8Array
-    const { fetchFile } = window.FFmpegUtil;
-    await ffmpeg.writeFile(inputName, await fetchFile(vconvFile));
+    // ffmpegFetchFile 来自 @ffmpeg/util（在 loadFFmpeg 里赋值）
+    // 把 File 对象读成 Uint8Array 传给 ffmpeg.writeFile
+    await ffmpeg.writeFile(inputName, await ffmpegFetchFile(vconvFile));
 
     // 不同输出格式的命令：
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
@@ -1442,7 +1467,7 @@ async function convertVideo() {
     toast(t('tool.done'));
   } catch (e) {
     console.error('[video convert]', e);
-    hint.textContent = t('tool.convertFail');
+    hint.textContent = t('tool.videoConvertFail');
   } finally {
     btn.disabled = false;
     btn.textContent = t('tool.convert');
