@@ -176,6 +176,10 @@ const LOCALES = {
     'login.fail': 'Verification failed: invalid or expired key',
     'login.neterr': 'Network error, please retry',
     'login.anonNote': 'Anonymous mode: about 1 request per 15s',
+    'login.oauthChecking': 'Authorizing… please complete sign-in',
+    'login.oauthDenied': 'Authorization cancelled',
+    'login.oauthFail': 'Authorization failed, please retry',
+    'login.pollinations': 'Sign in with Pollinations',
 
     'header.lang': 'Language',
     'header.theme': 'Toggle theme',
@@ -336,6 +340,10 @@ const LOCALES = {
     'login.fail': '確認失敗：キーが無効か期限切れです',
     'login.neterr': 'ネットワークエラー。再試行してください',
     'login.anonNote': '匿名モード：約15秒に1回',
+    'login.oauthChecking': '承認中…ログインを完了してください',
+    'login.oauthDenied': '承認がキャンセルされました',
+    'login.oauthFail': '承認に失敗しました。再試行してください',
+    'login.pollinations': 'Pollinations でログイン',
 
     'header.lang': '言語',
     'header.theme': 'テーマ切替',
