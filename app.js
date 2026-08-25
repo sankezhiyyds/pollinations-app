@@ -1299,8 +1299,6 @@ function convertImage() {
 const FFMPEG_CFG = {
   // 主类 UMD：加载后挂到 window.FFmpegWASM（含 FFmpeg 类）
   ffmpegJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
-  // 工具 UMD：加载后挂到 window.FFmpegUtil（含 toBlobURL / fetchFile）
-  utilJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.2/dist/umd/index.js',
   // worker chunk：0.12.x 内部 new Worker 的目标，必须转成同源 blob 规避跨域拦截
   workerURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js',
   // 单线程 core（无 SharedArrayBuffer 依赖）
@@ -1321,9 +1319,35 @@ function loadScript(src) {
   });
 }
 
+// @ffmpeg/util 的 UMD 包在浏览器 <script> 环境下会抛 "exports is not defined"
+// （其内部引用了 CommonJS 的 exports），无法挂载 window.FFmpegUtil。
+// 它只提供两个很简单的工具函数，这里自行实现，彻底去掉该依赖。
+
+// 把远程资源 fetch 成同源 blob: URL（等价于 @ffmpeg/util 的 toBlobURL）
+async function toBlobURL(src, mimeType) {
+  const resp = await fetch(src);
+  if (!resp.ok) throw new Error('fetch failed(' + resp.status + '): ' + src);
+  const buf = await resp.arrayBuffer();
+  const blob = new Blob([buf], { type: mimeType });
+  return URL.createObjectURL(blob);
+}
+
+// 把 File/Blob/URL 读成 Uint8Array（等价于 @ffmpeg/util 的 fetchFile）
+async function fetchFile(input) {
+  if (input instanceof Blob) {
+    return new Uint8Array(await input.arrayBuffer());
+  }
+  if (typeof input === 'string') {
+    const resp = await fetch(input);
+    return new Uint8Array(await resp.arrayBuffer());
+  }
+  if (input instanceof Uint8Array) return input;
+  if (input instanceof ArrayBuffer) return new Uint8Array(input);
+  throw new Error('fetchFile: unsupported input');
+}
+
 let ffmpegInstance = null;
 let ffmpegLoading = null;
-let ffmpegFetchFile = null; // @ffmpeg/util 的 fetchFile，convertVideo 里复用
 let vconvFile = null;
 
 async function loadFFmpeg() {
@@ -1331,13 +1355,10 @@ async function loadFFmpeg() {
   if (ffmpegLoading) return ffmpegLoading;
 
   ffmpegLoading = (async () => {
-    // 1) 顺序加载两个 UMD 包，分别暴露 window.FFmpegWASM / window.FFmpegUtil
+    // 1) 加载主类 UMD，暴露 window.FFmpegWASM（工具函数已自实现，无需 util 包）
     await loadScript(FFMPEG_CFG.ffmpegJS);
-    await loadScript(FFMPEG_CFG.utilJS);
 
     const { FFmpeg } = window.FFmpegWASM;
-    const { toBlobURL, fetchFile } = window.FFmpegUtil;
-    ffmpegFetchFile = fetchFile;
 
     // 2) 把 worker / core / wasm 三个远程文件转成同源 blob: URL
     //    —— 这一步是绕过 Tracking Prevention 跨域 Worker 拦截的关键
@@ -1395,9 +1416,8 @@ async function convertVideo() {
     const inputName = 'input.' + ext;
     const outputName = 'output.' + format;
 
-    // ffmpegFetchFile 来自 @ffmpeg/util（在 loadFFmpeg 里赋值）
-    // 把 File 对象读成 Uint8Array 传给 ffmpeg.writeFile
-    await ffmpeg.writeFile(inputName, await ffmpegFetchFile(vconvFile));
+    // fetchFile 为自实现工具（见上），把 File 读成 Uint8Array 传给 ffmpeg.writeFile
+    await ffmpeg.writeFile(inputName, await fetchFile(vconvFile));
 
     // 不同输出格式的命令：
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
