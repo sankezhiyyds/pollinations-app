@@ -1421,17 +1421,17 @@ async function convertVideo() {
       const palette = 'palette.png';
       const paletteFilter = 'fps=10,scale=480:-1:flags=lanczos,palettegen';
       const useFilter = 'fps=10,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse';
-      await ffmpeg.exec('-i', inputName, '-vf', paletteFilter, palette);
-      await ffmpeg.exec('-i', inputName, '-i', palette, '-lavfi', useFilter, outputName);
+      await ffmpeg.exec(['-i', inputName, '-vf', paletteFilter, palette]);
+      await ffmpeg.exec(['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
       try { await ffmpeg.deleteFile(palette); } catch (_) {}
     } else if (format === 'webm') {
       args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-crf', crf, '-b:v', '0',
               '-c:a', 'libopus', '-pix_fmt', 'yuv420p', outputName];
-      await ffmpeg.exec(...args);
+      await ffmpeg.exec(args);
     } else if (format === 'webp') {
       // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
       const frameName = 'frame.jpg';
-      await ffmpeg.exec('-i', inputName, '-frames:v', '1', '-q:v', '5', frameName);
+      await ffmpeg.exec(['-i', inputName, '-frames:v', '1', '-q:v', '5', frameName]);
       const frameData = await ffmpeg.readFile(frameName);
       try { await ffmpeg.deleteFile(frameName); } catch (_) {}
       const img = await blobToImage(new Blob([frameData.buffer || frameData]));
@@ -1457,7 +1457,7 @@ async function convertVideo() {
       args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium',
               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
               '-movflags', '+faststart', outputName];
-      await ffmpeg.exec(...args);
+      await ffmpeg.exec(args);
     }
 
     const data = await ffmpeg.readFile(outputName);
