@@ -115,30 +115,50 @@ const assistant = {
 
 // ---------- 登录 / 鉴权 ----------
 
-// 校验 Key：必须用 /account/balance
-// 注意：不能用 /v1/models，那是公开端点，任何乱码 Key 都会返回 200，等于没校验
-// /account/balance 强制鉴权且不消耗额度，无 Key / 无效 Key 均返回 401
+// 校验 Key：双端点交叉验证
+// /account/balance 对"无 key / 假 key"返回 401，对"有效 key 但该类型无余额权限"返回 404
+// /v1/models 是公开端点（任何 key 都 200），但当 key 完全无效时会返回 401/403
+// 策略：balance 成功 → ok；balance 404 + models 200 → ok（老 key 类型，无余额权限）；
+// balance 401/403 + models 401/403 → invalid；其他 → neterr
 async function verifyKey(key) {
+  const auth = { 'Authorization': 'Bearer ' + key };
+  let balanceRes, modelsRes;
   try {
-    const res = await fetch(API.base + '/account/balance', {
-      headers: { 'Authorization': 'Bearer ' + key }
-    });
-    if (res.status === 401 || res.status === 403) return 'invalid';
-    if (!res.ok) return 'neterr';
-
-    let balance = null;
-    try {
-      const data = await res.json();
-      const raw = data && (data.balance != null ? data.balance
-        : (data.data && data.data.balance != null ? data.data.balance : null));
-      if (raw != null) balance = Number(raw);
-    } catch (e) { /* 余额解析失败不影响登录 */ }
-
-    state.balance = balance;
-    return 'ok';
+    [balanceRes, modelsRes] = await Promise.allSettled([
+      fetch(API.base + '/account/balance', { headers: auth }),
+      fetch(API.base + '/v1/models', { headers: auth })
+    ]);
   } catch (e) {
     return 'neterr';
   }
+
+  const b = balanceRes.status === 'fulfilled' ? balanceRes.value : null;
+  const m = modelsRes.status === 'fulfilled' ? modelsRes.value : null;
+  const bOk = b && b.ok;
+  const b404 = b && (b.status === 404);
+  const bAuthFail = b && (b.status === 401 || b.status === 403);
+  const mOk = m && m.ok;
+  const mAuthFail = m && (m.status === 401 || m.status === 403);
+
+  if (bOk) {
+    // /account/balance 成功，解析余额
+    try {
+      const data = await b.json();
+      const raw = data && (data.balance != null ? data.balance
+        : (data.data && data.data.balance != null ? data.data.balance : null));
+      if (raw != null) state.balance = Number(raw);
+    } catch (e) { /* 解析失败不影响登录 */ }
+    return 'ok';
+  }
+  if (b404 && mOk) {
+    // 老 key 类型：balance 不支持（404），但 models 能访问 → key 有效
+    return 'ok';
+  }
+  if ((bAuthFail || mAuthFail) && !bOk && !b404) {
+    // 鉴权失败
+    return 'invalid';
+  }
+  return 'neterr';
 }
 
 async function doLogin() {
@@ -1378,8 +1398,8 @@ async function loadFFmpeg() {
 
 // wasm 发生致命错误（如 memory access out of bounds）后 worker 不再回包，
 // exec() 的 promise 会永远 pending。用看门狗检测"心跳停止"并主动 reject。
-// 注意：ffmpeg 编第 1 帧时可能几十秒才打一次进度（编码器内部缓冲），
-// 所以阈值 60 秒——比任何合法的单帧编码都长，但远小于永久挂起。
+// VP9 -cpu-used 3 编第 1 帧可能慢（20~40s），但 ffmpeg log 每帧都会打 frame=N 行，
+// 所以 60 秒静默 = 引擎真死了。真死掉的引擎永远不会再产生任何 log。
 const WATCHDOG_IDLE_MS = 60_000;
 function execWatched(ffmpeg, args, idleMs = WATCHDOG_IDLE_MS) {
   ffmpegLastActivity = Date.now();
@@ -1462,7 +1482,10 @@ async function convertVideo() {
       await execWatched(ffmpeg, ['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
       try { await ffmpeg.deleteFile(palette); } catch (_) {}
     } else if (format === 'webm') {
-      args = ['-i', inputName, '-c:v', 'libvpx', '-cpu-used', '-1', '-crf', crf, '-b:v', '0',
+      // libvpx-vp9 在单线程 wasm 下偶发 memory access out of bounds（issue #679），
+      // 用 -cpu-used 3 平衡速度与质量：默认 6 质量太差，-1 太慢。
+      // error-resilient=1 防止帧错误扩散。crf max-intra-rate -1 禁止关键帧混用不同 CRF
+      args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-cpu-used', '3', '-crf', crf, '-b:v', '0',
               '-crf max-intra-rate', '-1', '-error-resilient', '1',
               '-c:a', 'libvorbis', '-qscale:a', '6', '-pix_fmt', 'yuv420p', outputName];
       await execWatched(ffmpeg, args);
