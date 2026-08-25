@@ -322,6 +322,7 @@ function buildImageUrl(prompt, opts) {
   p.set('width', opts.width);
   p.set('height', opts.height);
   p.set('seed', opts.seed);
+  if (opts.negative) p.set('negative', opts.negative);
   if (opts.nologo) p.set('nologo', 'true');
   if (opts.enhance) p.set('enhance', 'true');
   if (opts.priv) p.set('private', 'true');
@@ -336,6 +337,7 @@ function buildLegacyImageUrl(prompt, opts) {
   p.set('width', opts.width);
   p.set('height', opts.height);
   p.set('seed', opts.seed);
+  if (opts.negative) p.set('negative', opts.negative);
   if (opts.nologo) p.set('nologo', 'true');
   if (opts.enhance) p.set('enhance', 'true');
   if (opts.priv) p.set('private', 'true');
@@ -425,7 +427,8 @@ async function generateImage(reuseSeed) {
     model, width, height, seed,
     nologo: $('optNologo').checked,
     enhance: $('optEnhance').checked,
-    priv: $('optPrivate').checked
+    priv: $('optPrivate').checked,
+    negative: $('imgNegPrompt').value.trim()
   };
 
   state.abort = new AbortController();

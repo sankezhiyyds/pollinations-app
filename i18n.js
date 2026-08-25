@@ -80,6 +80,8 @@ const LOCALES = {
 
     'img.prompt': '提示词',
     'img.promptPh': '一只戴着宇航头盔的柴犬，赛博朋克霓虹街道',
+    'img.negPrompt': '负向提示词',
+    'img.negPromptPh': '模糊，低质量，变形，水印',
     'img.model': '模型',
     'img.ratio': '尺寸',
     'img.seed': '随机种子',
@@ -232,6 +234,8 @@ const LOCALES = {
 
     'img.prompt': 'Prompt',
     'img.promptPh': 'A shiba inu wearing an astronaut helmet, cyberpunk neon street',
+    'img.negPrompt': 'Negative prompt',
+    'img.negPromptPh': 'blurry, low quality, deformed, watermark',
     'img.model': 'Model',
     'img.ratio': 'Size',
     'img.seed': 'Seed',
@@ -392,6 +396,8 @@ const LOCALES = {
 
     'img.prompt': 'プロンプト',
     'img.promptPh': '宇宙ヘルメットをかぶった柴犬、サイバーパンクのネオン街',
+    'img.negPrompt': 'ネガティブプロンプト',
+    'img.negPromptPh': 'ぼやけ、低品質、変形、ウォーターマーク',
     'img.model': 'モデル',
     'img.ratio': 'サイズ',
     'img.seed': 'シード',
