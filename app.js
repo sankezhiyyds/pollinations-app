@@ -12,23 +12,9 @@
 // ============================================================
 
 const API = {
-  get base() {
-    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
-    if (provider === 'custom') {
-      return (localStorage.getItem(STORE.customEndpoint) || '').replace(/\/+$/, '');
-    }
-    return 'https://gen.pollinations.ai';
-  },
-  get legacyImage() {
-    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
-    if (provider === 'custom') return this.base;
-    return 'https://image.pollinations.ai';
-  },
-  get legacyText() {
-    const provider = localStorage.getItem(STORE.provider) || 'pollinations';
-    if (provider === 'custom') return this.base;
-    return 'https://text.pollinations.ai';
-  }
+  get base() { return 'https://gen.pollinations.ai'; },
+  get legacyImage() { return 'https://image.pollinations.ai'; },
+  get legacyText() { return 'https://text.pollinations.ai'; }
 };
 
 const STORE = {
@@ -36,9 +22,7 @@ const STORE = {
   theme: 'pl_theme',
   hist: 'pl_history',
   anon: 'pl_anon',
-  mascot: 'pl_mascot_pos',
-  provider: 'pl_api_provider',
-  customEndpoint: 'pl_custom_endpoint'
+  mascot: 'pl_mascot_pos'
 };
 
 const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
@@ -337,8 +321,7 @@ function buildImageUrl(prompt, opts) {
   if (state.apiKey) p.set('key', state.apiKey);
   else p.set('referrer', location.hostname || 'localhost');
 
-  const base = localStorage.getItem(STORE.provider) === 'custom' ? API.base : API.gen;
-  return base + '/image/' + encodeURIComponent(prompt) + '?' + p.toString();
+  return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
 }
 
 function buildLegacyImageUrl(prompt, opts) {
@@ -504,7 +487,7 @@ function buildAudioUrl(text, opts) {
   p.set('response_format', opts.format || 'mp3');
   if (opts.instructions) p.set('instructions', opts.instructions);
   p.set('key', state.apiKey);
-  return API.gen + '/audio/' + encodeURIComponent(text) + '?' + p.toString();
+  return API.base + '/audio/' + encodeURIComponent(text) + '?' + p.toString();
 }
 
 async function generateAudio(reuse) {
@@ -576,8 +559,7 @@ function buildVideoUrl(prompt, opts) {
   if (opts.audio) p.set('audio', 'true');
   if (opts.seed != null) p.set('seed', opts.seed);
   p.set('key', state.apiKey);
-  const base = localStorage.getItem(STORE.provider) === 'custom' ? API.base : API.gen;
-  return base + '/video/' + encodeURIComponent(prompt) + '?' + p.toString();
+  return API.base + '/video/' + encodeURIComponent(prompt) + '?' + p.toString();
 }
 
 async function generateVideo(reuse) {
@@ -775,13 +757,9 @@ async function sendMessage() {
 
   const signal = state.abort.signal;
   // 实测旧版 text.pollinations.ai 匿名更稳定，故匿名优先旧版；有 Key 则优先新版
-  // 自定义 endpoint 只走自己配置的 base
-  const provider = localStorage.getItem(STORE.provider) || 'pollinations';
-  const chain = provider === 'custom'
-    ? [API.base + '/v1/chat/completions']
-    : state.apiKey
-      ? [API.base + '/v1/chat/completions', API.legacyText + '/openai']
-      : [API.legacyText + '/openai', API.base + '/v1/chat/completions'];
+  const chain = state.apiKey
+    ? [API.base + '/v1/chat/completions', API.legacyText + '/openai']
+    : [API.legacyText + '/openai', API.base + '/v1/chat/completions'];
 
   let result = false;
   for (const endpoint of chain) {
@@ -793,8 +771,8 @@ async function sendMessage() {
     if (signal.aborted) {
       state.messages.splice(idx, 1);
     } else {
-      state.messages[idx].content = result === 'ratelimit' ? t('txt.rate') : t('txt.fail');
-      assistant.say(result === 'ratelimit' ? 'ast.rate' : 'ast.imgFail');
+      state.messages[idx].content = result === 'ratelimit' ? t('txt.rate') : (result === 'unauth' ? t('txt.unauth') : t('txt.fail'));
+      assistant.say(result === 'ratelimit' ? 'ast.rate' : (result === 'unauth' ? 'ast.imgFail' : 'ast.imgFail'));
     }
   } else {
     assistant.say('ast.textDone');
@@ -827,7 +805,20 @@ async function streamChat(endpoint, payload, idx) {
     });
 
     // 实测：匿名调用会间歇性返回 401/429，属于限流而非 Key 无效
-    if (res.status === 401 || res.status === 429) return 'ratelimit';
+    if (res.status === 401 || res.status === 429) {
+      // 区分"限流"和"无权限"：读取响应体判断
+      try {
+        const ct = res.headers.get('content-type') || '';
+        if (ct.includes('json')) {
+          const body = await res.json();
+          const msg = body && (body.message || (body.error && body.error.message) || '');
+          if (msg && (msg.includes('session') || msg.includes('token') || msg.includes('permission'))) {
+            return 'unauth';
+          }
+        }
+      } catch (e) { /* ignore */ }
+      return 'ratelimit';
+    }
     if (!res.ok || !res.body) return false;
 
     const reader = res.body.getReader();
