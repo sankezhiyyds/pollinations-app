@@ -130,24 +130,42 @@ function base64url(buf) {
   return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
+// 规范化 redirect_uri：去掉 query/hash，并把结尾的 index.html 归一到目录形式，
+// 保证 authorize 和 token 两次请求用的是完全相同的字符串（文档要求精确匹配）
+function getRedirectURI() {
+  let path = location.origin + location.pathname;
+  path = path.replace(/index\.html?$/i, '');
+  return path;
+}
+
 // 生成 PKCE verifier 和 code_challenge
+// RFC 7636：code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
 async function generatePKCE() {
   const arr = new Uint8Array(32);
   crypto.getRandomValues(arr);
   const verifier = base64url(arr);
-  const hash = await crypto.subtle.digest('SHA-256', arr);
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
   const challenge = base64url(hash);
   return { verifier, challenge };
 }
 
-// 构建授权链接（Legacy Fragment Flow，兼容纯前端无回调页）
-function buildAuthorizeURL(state) {
+// 生成随机 CSRF state（防跨站请求伪造）
+function generateState() {
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return base64url(arr);
+}
+
+// 构建授权链接（Authorization Code Flow + PKCE）
+function buildAuthorizeURL(csrfState, challenge) {
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: APP_KEY,
-    redirect_uri: location.href.split('?')[0].split('#')[0],
-    scope: 'profile usage',
-    state: state
+    redirect_uri: getRedirectURI(),
+    scope: 'usage',
+    state: csrfState,
+    code_challenge: challenge,
+    code_challenge_method: 'S256'
   });
   return AUTH_BASE + '/authorize?' + params;
 }
@@ -158,7 +176,7 @@ async function exchangeCode(code, verifier) {
     grant_type: 'authorization_code',
     code: code,
     client_id: APP_KEY,
-    redirect_uri: location.href.split('?')[0].split('#')[0],
+    redirect_uri: getRedirectURI(),
     code_verifier: verifier
   });
   const res = await fetch(AUTH_BASE + '/api/oauth/token', {
@@ -173,25 +191,32 @@ async function exchangeCode(code, verifier) {
 // 用户通过 Pollinations 授权登录
 async function pollinationsLogin() {
   const { verifier, challenge } = await generatePKCE();
-  // 把 verifier 存入 sessionStorage，回调时取出
+  const csrfState = generateState();
+  // verifier 和 state 存入 sessionStorage，回调时取出核对
   sessionStorage.setItem(STORE.byopKey + '_verifier', verifier);
-  sessionStorage.setItem(STORE.byopKey + '_state', Date.now().toString());
+  sessionStorage.setItem(STORE.byopKey + '_state', csrfState);
 
-  const authUrl = buildAuthorizeURL(sessionStorage.getItem(STORE.byopKey + '_state'));
-  window.location.href = authUrl;
+  window.location.href = buildAuthorizeURL(csrfState, challenge);
 }
 
-// 检查 URL hash 是否有授权回调
+// 解析授权回调：Authorization Code Flow 把参数放在 query string，
+// Legacy Fragment Flow 把 api_key 放在 hash，两者都兼容
 function handleOAuthCallback() {
-  const hash = location.hash.slice(1);
-  if (!hash) return null;
-  const params = new URLSearchParams(hash);
-  const code = params.get('code');
-  const state = params.get('state');
-  const error = params.get('error');
+  const query = new URLSearchParams(location.search);
+  const code = query.get('code');
+  const oauthState = query.get('state');
+  const error = query.get('error');
   if (error) return { error };
-  if (!code) return null;
-  return { code, state };
+  if (code) return { code, oauthState };
+
+  // Legacy Fragment Flow：#api_key=sk_...
+  const hash = location.hash.slice(1);
+  if (hash) {
+    const hp = new URLSearchParams(hash);
+    const apiKey = hp.get('api_key');
+    if (apiKey) return { apiKey };
+  }
+  return null;
 }
 
 // 校验 Key：双端点交叉验证
@@ -280,39 +305,65 @@ async function doLogin() {
   setTimeout(enterApp, 420);
 }
 
-// BYOP 授权回调处理（页面刷新时从 hash 取回 token）
+// BYOP 授权回调处理：从 query 取回授权码换 token
+// 返回 true 表示本次是授权回调（init 据此短路后续登录判断）
 async function handleOAuthFlow() {
   const cb = handleOAuthCallback();
-  if (!cb) return;
-  // 清除 hash，避免刷新重复处理
-  history.replaceState(null, null, location.pathname + location.search);
+  if (!cb) return false;
+
+  const savedState = sessionStorage.getItem(STORE.byopKey + '_state');
+  // 清除 URL 上的 OAuth 参数，避免刷新重复处理
+  history.replaceState(null, '', getRedirectURI());
+
   if (cb.error) {
     toast(t('login.oauthDenied'));
     openLoginModal();
-    return;
+    return true;
   }
-  // 打开登录弹窗显示加载状态
+
   openLoginModal();
   const msg = $('loginMsg');
   msg.className = 'login-msg';
   msg.textContent = t('login.oauthChecking');
+
   try {
-    const verifier = sessionStorage.getItem(STORE.byopKey + '_verifier');
-    if (!verifier) throw new Error('no verifier');
-    const data = await exchangeCode(cb.code, verifier);
-    const token = data.access_token;
-    if (!token) throw new Error('no token');
+    let token;
+    if (cb.apiKey) {
+      // Legacy Fragment Flow：直接拿到 key，无需换取
+      token = cb.apiKey;
+    } else {
+      // Authorization Code Flow：先核对 CSRF state
+      if (!cb.oauthState || cb.oauthState !== savedState) {
+        throw new Error('state mismatch');
+      }
+      const verifier = sessionStorage.getItem(STORE.byopKey + '_verifier');
+      if (!verifier) throw new Error('no verifier');
+      const data = await exchangeCode(cb.code, verifier);
+      token = data.access_token;
+      if (!token) throw new Error('no token');
+    }
+
     sessionStorage.removeItem(STORE.byopKey + '_verifier');
+    sessionStorage.removeItem(STORE.byopKey + '_state');
+
+    // 校验并读取余额，确认 token 可用后再进主界面
+    state.apiKey = token;
+    const r = await verifyKey(token);
+    if (r === 'invalid') throw new Error('token invalid');
+
     // sk_ 临时 token 存 sessionStorage，不用 localStorage
     sessionStorage.setItem(STORE.byopKey, token);
-    state.apiKey = token;
     state.anonymous = false;
-    setTimeout(enterApp, 300);
+    updateBadge();
+    enterApp();
   } catch (e) {
+    state.apiKey = '';
+    sessionStorage.removeItem(STORE.byopKey + '_verifier');
+    sessionStorage.removeItem(STORE.byopKey + '_state');
     msg.className = 'login-msg err';
     msg.textContent = t('login.oauthFail');
-    sessionStorage.removeItem(STORE.byopKey + '_verifier');
   }
+  return true;
 }
 
 function doAnonymous() {
@@ -1683,7 +1734,7 @@ function blobToImage(blob) {
 
 // ---------- 启动 ----------
 
-function init() {
+async function init() {
   // 深色是默认主题，只有浅色才需要写 data-theme
   applyTheme(localStorage.getItem(STORE.theme) || 'dark');
   $('langSelect').value = currentLang;
@@ -1698,6 +1749,9 @@ function init() {
 
   $('imgSeed').value = randSeed();
 
+  // 最先处理 OAuth 回调：若本次是授权回调，交由 handleOAuthFlow 决定界面，短路后续判断
+  if (await handleOAuthFlow()) return;
+
   // 已保存过 Key 或选过匿名，直接进主界面
   // 优先检查 BYOP 临时 token（sessionStorage）
   const byopToken = sessionStorage.getItem(STORE.byopKey);
@@ -1705,6 +1759,22 @@ function init() {
     state.apiKey = byopToken;
     state.anonymous = false;
     enterApp();
+    verifyKey(byopToken).then(r => {
+      if (r === 'invalid') {
+        // 7 天 token 已过期：清理并要求重新授权
+        sessionStorage.removeItem(STORE.byopKey);
+        state.apiKey = '';
+        state.balance = null;
+        updateBadge();
+        $('loginBtn').classList.remove('hidden');
+        $('logoutBtn').classList.add('hidden');
+        openLoginModal();
+        $('loginMsg').className = 'login-msg err';
+        $('loginMsg').textContent = t('login.fail');
+      } else if (r === 'ok') {
+        updateBadge();
+      }
+    });
   } else {
     const saved = localStorage.getItem(STORE.key);
     if (saved) {
@@ -1734,9 +1804,6 @@ function init() {
       openLoginModal();
     }
   }
-
-  // 处理 OAuth 回调（hash fragment）
-  handleOAuthFlow();
 }
 
 document.addEventListener('DOMContentLoaded', init);
