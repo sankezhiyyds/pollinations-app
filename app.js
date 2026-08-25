@@ -1378,7 +1378,10 @@ async function loadFFmpeg() {
 
 // wasm 发生致命错误（如 memory access out of bounds）后 worker 不再回包，
 // exec() 的 promise 会永远 pending。用看门狗检测"心跳停止"并主动 reject。
-function execWatched(ffmpeg, args, idleMs = 60000) {
+// 注意：ffmpeg 编第 1 帧时可能几十秒才打一次进度（编码器内部缓冲），
+// 所以阈值 60 秒——比任何合法的单帧编码都长，但远小于永久挂起。
+const WATCHDOG_IDLE_MS = 60_000;
+function execWatched(ffmpeg, args, idleMs = WATCHDOG_IDLE_MS) {
   ffmpegLastActivity = Date.now();
   let timer;
   const watchdog = new Promise((_, reject) => {
@@ -1446,6 +1449,7 @@ async function convertVideo() {
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
     //   webm - libvpx(VP8) + libvorbis；注意不能用 libvpx-vp9，
     //          单线程 ffmpeg.wasm 编 VP9 会触发 memory access out of bounds（已知问题 #679）
+    //          -cpu-used -1 强制最高质量（代价是慢）；crf max-intra-rate -1 禁止关键帧混用不同 CRF
     //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
     //   webp - 抽帧导出单张 WebP（Canvas API 原生支持，无需 ffmpeg）
     let args;
@@ -1458,8 +1462,9 @@ async function convertVideo() {
       await execWatched(ffmpeg, ['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
       try { await ffmpeg.deleteFile(palette); } catch (_) {}
     } else if (format === 'webm') {
-      args = ['-i', inputName, '-c:v', 'libvpx', '-crf', crf, '-b:v', '0',
-              '-c:a', 'libvorbis', '-pix_fmt', 'yuv420p', outputName];
+      args = ['-i', inputName, '-c:v', 'libvpx', '-cpu-used', '-1', '-crf', crf, '-b:v', '0',
+              '-crf max-intra-rate', '-1', '-error-resilient', '1',
+              '-c:a', 'libvorbis', '-qscale:a', '6', '-pix_fmt', 'yuv420p', outputName];
       await execWatched(ffmpeg, args);
     } else if (format === 'webp') {
       // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
