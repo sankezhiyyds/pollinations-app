@@ -22,13 +22,8 @@ const STORE = {
   theme: 'pl_theme',
   hist: 'pl_history',
   anon: 'pl_anon',
-  mascot: 'pl_mascot_pos',
-  byopKey: 'pl_byop_key' // sessionStorage key — sk_ 临时 token 不用 localStorage
+  mascot: 'pl_mascot_pos'
 };
-
-// BYOP App Key（publishable key）
-const APP_KEY = 'pk_mGwzI3AjDBW6xneQ';
-const AUTH_BASE = 'https://enter.pollinations.ai';
 
 const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
 const FALLBACK_TEXT_MODELS = ['openai', 'openai-fast', 'openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
@@ -120,149 +115,35 @@ const assistant = {
 
 // ---------- 登录 / 鉴权 ----------
 
-// ---------- BYOP OAuth（PKCE 流程）----------
-
-// 用 base64url 编码 ArrayBuffer（不引入外部库）
-function base64url(buf) {
-  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-}
-
-// 规范化 redirect_uri：去掉 query/hash，并把结尾的 index.html 归一到目录形式，
-// 保证 authorize 和 token 两次请求用的是完全相同的字符串（文档要求精确匹配）
-function getRedirectURI() {
-  let path = location.origin + location.pathname;
-  path = path.replace(/index\.html?$/i, '');
-  return path;
-}
-
-// 生成 PKCE verifier 和 code_challenge
-// RFC 7636：code_challenge = BASE64URL(SHA256(ASCII(code_verifier)))
-async function generatePKCE() {
-  const arr = new Uint8Array(32);
-  crypto.getRandomValues(arr);
-  const verifier = base64url(arr);
-  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier));
-  const challenge = base64url(hash);
-  return { verifier, challenge };
-}
-
-// 生成随机 CSRF state（防跨站请求伪造）
-function generateState() {
-  const arr = new Uint8Array(16);
-  crypto.getRandomValues(arr);
-  return base64url(arr);
-}
-
-// 构建授权链接（Authorization Code Flow + PKCE）
-function buildAuthorizeURL(csrfState, challenge) {
-  const params = new URLSearchParams({
-    response_type: 'code',
-    client_id: APP_KEY,
-    redirect_uri: getRedirectURI(),
-    scope: 'usage',
-    state: csrfState,
-    code_challenge: challenge,
-    code_challenge_method: 'S256'
-  });
-  return AUTH_BASE + '/authorize?' + params;
-}
-
-// 授权码换 token（PKCE）
-async function exchangeCode(code, verifier) {
-  const form = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code: code,
-    client_id: APP_KEY,
-    redirect_uri: getRedirectURI(),
-    code_verifier: verifier
-  });
-  const res = await fetch(AUTH_BASE + '/api/oauth/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: form
-  });
-  if (!res.ok) throw new Error('token exchange failed: ' + res.status);
-  return res.json();
-}
-
-// 用户通过 Pollinations 授权登录
-async function pollinationsLogin() {
-  const { verifier, challenge } = await generatePKCE();
-  const csrfState = generateState();
-  // verifier 和 state 存入 sessionStorage，回调时取出核对
-  sessionStorage.setItem(STORE.byopKey + '_verifier', verifier);
-  sessionStorage.setItem(STORE.byopKey + '_state', csrfState);
-
-  window.location.href = buildAuthorizeURL(csrfState, challenge);
-}
-
-// 解析授权回调：Authorization Code Flow 把参数放在 query string，
-// Legacy Fragment Flow 把 api_key 放在 hash，两者都兼容
-function handleOAuthCallback() {
-  const query = new URLSearchParams(location.search);
-  const code = query.get('code');
-  const oauthState = query.get('state');
-  const error = query.get('error');
-  if (error) return { error };
-  if (code) return { code, oauthState };
-
-  // Legacy Fragment Flow：#api_key=sk_...
-  const hash = location.hash.slice(1);
-  if (hash) {
-    const hp = new URLSearchParams(hash);
-    const apiKey = hp.get('api_key');
-    if (apiKey) return { apiKey };
-  }
-  return null;
-}
-
-// 校验 Key：双端点交叉验证
-// /account/balance 对"无 key / 假 key"返回 401，对"有效 key 但该类型无余额权限"返回 404
-// /v1/models 是公开端点（任何 key 都 200），但当 key 完全无效时会返回 401/403
-// 策略：balance 成功 → ok；balance 404 + models 200 → ok（老 key 类型，无余额权限）；
-// balance 401/403 + models 401/403 → invalid；其他 → neterr
+// 校验 Key：只有 401 代表「key 无效」。
+// 官方错误码：401=key 无效/缺失；402=余额不足（key 有效）；403=key 有效但缺某项权限。
+// 所以 balance 返回 403/402 时，key 本身是有效的，只是没有读余额权限/余额不够，
+// 不应判为「无效」。策略：401 → invalid；200 读余额 → ok；其余非网络错误 → ok。
 async function verifyKey(key) {
   const auth = { 'Authorization': 'Bearer ' + key };
-  let balanceRes, modelsRes;
+  let balanceRes;
   try {
-    [balanceRes, modelsRes] = await Promise.allSettled([
-      fetch(API.base + '/account/balance', { headers: auth }),
-      fetch(API.base + '/v1/models', { headers: auth })
-    ]);
+    balanceRes = await fetch(API.base + '/account/balance', { headers: auth });
   } catch (e) {
     return 'neterr';
   }
 
-  const b = balanceRes.status === 'fulfilled' ? balanceRes.value : null;
-  const m = modelsRes.status === 'fulfilled' ? modelsRes.value : null;
-  const bOk = b && b.ok;
-  const b404 = b && (b.status === 404);
-  const bAuthFail = b && (b.status === 401 || b.status === 403);
-  const mOk = m && m.ok;
-  const mAuthFail = m && (m.status === 401 || m.status === 403);
+  // 401 才是唯一明确的「key 无效」信号
+  if (balanceRes.status === 401) return 'invalid';
 
-  if (bOk) {
+  if (balanceRes.ok) {
     // /account/balance 成功，解析余额
     try {
-      const data = await b.json();
+      const data = await balanceRes.json();
       const raw = data && (data.balance != null ? data.balance
         : (data.data && data.data.balance != null ? data.data.balance : null));
       if (raw != null) state.balance = Number(raw);
     } catch (e) { /* 解析失败不影响登录 */ }
     return 'ok';
   }
-  if (b404 && mOk) {
-    // 老 key 类型：balance 不支持（404），但 models 能访问 → key 有效
-    return 'ok';
-  }
-  if ((bAuthFail || mAuthFail) && !bOk && !b404) {
-    // 鉴权失败
-    return 'invalid';
-  }
-  return 'neterr';
+
+  // 402（余额不足）/403（缺 account 权限）/404（老网关无此端点）都说明 key 通过了鉴权
+  return 'ok';
 }
 
 async function doLogin() {
@@ -305,67 +186,6 @@ async function doLogin() {
   setTimeout(enterApp, 420);
 }
 
-// BYOP 授权回调处理：从 query 取回授权码换 token
-// 返回 true 表示本次是授权回调（init 据此短路后续登录判断）
-async function handleOAuthFlow() {
-  const cb = handleOAuthCallback();
-  if (!cb) return false;
-
-  const savedState = sessionStorage.getItem(STORE.byopKey + '_state');
-  // 清除 URL 上的 OAuth 参数，避免刷新重复处理
-  history.replaceState(null, '', getRedirectURI());
-
-  if (cb.error) {
-    toast(t('login.oauthDenied'));
-    openLoginModal();
-    return true;
-  }
-
-  openLoginModal();
-  const msg = $('loginMsg');
-  msg.className = 'login-msg';
-  msg.textContent = t('login.oauthChecking');
-
-  try {
-    let token;
-    if (cb.apiKey) {
-      // Legacy Fragment Flow：直接拿到 key，无需换取
-      token = cb.apiKey;
-    } else {
-      // Authorization Code Flow：先核对 CSRF state
-      if (!cb.oauthState || cb.oauthState !== savedState) {
-        throw new Error('state mismatch');
-      }
-      const verifier = sessionStorage.getItem(STORE.byopKey + '_verifier');
-      if (!verifier) throw new Error('no verifier');
-      const data = await exchangeCode(cb.code, verifier);
-      token = data.access_token;
-      if (!token) throw new Error('no token');
-    }
-
-    sessionStorage.removeItem(STORE.byopKey + '_verifier');
-    sessionStorage.removeItem(STORE.byopKey + '_state');
-
-    // 校验并读取余额，确认 token 可用后再进主界面
-    state.apiKey = token;
-    const r = await verifyKey(token);
-    if (r === 'invalid') throw new Error('token invalid');
-
-    // sk_ 临时 token 存 sessionStorage，不用 localStorage
-    sessionStorage.setItem(STORE.byopKey, token);
-    state.anonymous = false;
-    updateBadge();
-    enterApp();
-  } catch (e) {
-    state.apiKey = '';
-    sessionStorage.removeItem(STORE.byopKey + '_verifier');
-    sessionStorage.removeItem(STORE.byopKey + '_state');
-    msg.className = 'login-msg err';
-    msg.textContent = t('login.oauthFail');
-  }
-  return true;
-}
-
 function doAnonymous() {
   state.apiKey = '';
   state.anonymous = true;
@@ -377,8 +197,6 @@ function doAnonymous() {
 function doLogout() {
   localStorage.removeItem(STORE.key);
   localStorage.removeItem(STORE.anon);
-  sessionStorage.removeItem(STORE.byopKey);
-  sessionStorage.removeItem(STORE.byopKey + '_verifier');
   state.apiKey = '';
   state.anonymous = false;
   state.balance = null;
@@ -1150,7 +968,6 @@ function applyTheme(theme) {
 function bindEvents() {
   // 登录弹窗
   $('loginSubmitBtn').addEventListener('click', doLogin);
-  $('pollinationsLoginBtn').addEventListener('click', pollinationsLogin);
   $('anonBtn').addEventListener('click', doAnonymous);
   $('logoutBtn').addEventListener('click', doLogout);
   $('loginBtn').addEventListener('click', openLoginModal);
@@ -1734,7 +1551,7 @@ function blobToImage(blob) {
 
 // ---------- 启动 ----------
 
-async function init() {
+function init() {
   // 深色是默认主题，只有浅色才需要写 data-theme
   applyTheme(localStorage.getItem(STORE.theme) || 'dark');
   $('langSelect').value = currentLang;
@@ -1749,22 +1566,17 @@ async function init() {
 
   $('imgSeed').value = randSeed();
 
-  // 最先处理 OAuth 回调：若本次是授权回调，交由 handleOAuthFlow 决定界面，短路后续判断
-  if (await handleOAuthFlow()) return;
-
   // 已保存过 Key 或选过匿名，直接进主界面
-  // 优先检查 BYOP 临时 token（sessionStorage）
-  const byopToken = sessionStorage.getItem(STORE.byopKey);
-  if (byopToken) {
-    state.apiKey = byopToken;
+  const saved = localStorage.getItem(STORE.key);
+  if (saved) {
+    state.apiKey = saved;
     state.anonymous = false;
     enterApp();
-    verifyKey(byopToken).then(r => {
+    verifyKey(saved).then(r => {
       if (r === 'invalid') {
-        // 7 天 token 已过期：清理并要求重新授权
-        sessionStorage.removeItem(STORE.byopKey);
+        localStorage.removeItem(STORE.key);
         state.apiKey = '';
-        state.balance = null;
+        state.anonymous = false;
         updateBadge();
         $('loginBtn').classList.remove('hidden');
         $('logoutBtn').classList.add('hidden');
@@ -1775,34 +1587,12 @@ async function init() {
         updateBadge();
       }
     });
+  } else if (localStorage.getItem(STORE.anon)) {
+    state.anonymous = true;
+    enterApp();
   } else {
-    const saved = localStorage.getItem(STORE.key);
-    if (saved) {
-      state.apiKey = saved;
-      state.anonymous = false;
-      enterApp();
-      verifyKey(saved).then(r => {
-        if (r === 'invalid') {
-          localStorage.removeItem(STORE.key);
-          state.apiKey = '';
-          state.anonymous = false;
-          updateBadge();
-          $('loginBtn').classList.remove('hidden');
-          $('logoutBtn').classList.add('hidden');
-          openLoginModal();
-          $('loginMsg').className = 'login-msg err';
-          $('loginMsg').textContent = t('login.fail');
-        } else if (r === 'ok') {
-          updateBadge();
-        }
-      });
-    } else if (localStorage.getItem(STORE.anon)) {
-      state.anonymous = true;
-      enterApp();
-    } else {
-      // 首次进入：显示 app 内容 + 登录弹窗
-      openLoginModal();
-    }
+    // 首次进入：显示 app 内容 + 登录弹窗
+    openLoginModal();
   }
 }
 
