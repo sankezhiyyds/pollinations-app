@@ -938,8 +938,16 @@ function reuseHistory(i) {
 // ---------- 界面交互 ----------
 
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(b =>
-    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach(b => {
+    const isActive = b.dataset.tab === name;
+    b.classList.toggle('active', isActive);
+    // 选中后把该选项卡滚进可视区，避免窄屏横向滚动时点选的文字被裁切
+    if (isActive && b.scrollIntoView) {
+      try {
+        b.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+      } catch (_) { /* 老浏览器降级：忽略 */ }
+    }
+  });
   document.querySelectorAll('.panel').forEach(p =>
     p.classList.toggle('active', p.id === 'panel-' + name));
 }
@@ -1089,6 +1097,27 @@ function bindEvents() {
   $('convQuality').addEventListener('input', e => { $('convQVal').textContent = e.target.value; });
   $('convBtn').addEventListener('click', convertImage);
 
+  // 视频格式转换
+  const vconvFileInput = document.createElement('input');
+  vconvFileInput.type = 'file';
+  vconvFileInput.accept = 'video/*';
+  vconvFileInput.style.display = 'none';
+  $('vconvDrop').appendChild(vconvFileInput);
+  $('vconvDrop').addEventListener('click', () => vconvFileInput.click());
+  vconvFileInput.addEventListener('change', e => handleVconvUpload(e.target.files[0]));
+  $('vconvDrop').addEventListener('dragover', e => { e.preventDefault(); $('vconvDrop').classList.add('dragover'); });
+  $('vconvDrop').addEventListener('dragleave', () => $('vconvDrop').classList.remove('dragover'));
+  $('vconvDrop').addEventListener('drop', e => {
+    e.preventDefault();
+    $('vconvDrop').classList.remove('dragover');
+    if (e.dataTransfer.files[0]) handleVconvUpload(e.dataTransfer.files[0]);
+  });
+  // 选 GIF 时隐藏质量档（GIF 走调色板两遍法，与 CRF 无关）
+  $('vconvFormat').addEventListener('change', e => {
+    $('vconvQualityRow').classList.toggle('hidden', e.target.value === 'gif');
+  });
+  $('vconvBtn').addEventListener('click', convertVideo);
+
   // 语言切换后重绘动态内容
   document.addEventListener('langchange', () => {
     renderChat();
@@ -1103,6 +1132,17 @@ function bindEvents() {
 }
 
 // ---------- 助手拖动 ----------
+
+// 根据助手当前在屏幕上的水平位置，决定气泡向左还是向右展开：
+//   mascot 在屏幕右半边 → 气泡在左（默认，避免溢出右边界）
+//   mascot 在屏幕左半边 → 气泡在右（翻转，避免溢出左边界）
+// 切换 .assistant.flip 即可，CSS 负责实际方向与缩放原点。
+function updateBubblePosition() {
+  const container = $('assistant');
+  const rect = container.getBoundingClientRect();
+  const centerX = rect.left + rect.width / 2;
+  container.classList.toggle('flip', centerX < window.innerWidth / 2);
+}
 
 function makeMascotDraggable() {
   const mascot = $('mascotBtn');
@@ -1121,6 +1161,8 @@ function makeMascotDraggable() {
       container.style.top = pos.y + 'px';
     } catch (_) {}
   }
+  // 初始化即根据恢复后的位置决定气泡朝向
+  updateBubblePosition();
 
   function onDown(e) {
     dragging = true; moved = false;
@@ -1150,6 +1192,8 @@ function makeMascotDraggable() {
     container.style.bottom = 'auto';
     container.style.left = nx + 'px';
     container.style.top = ny + 'px';
+    // 拖动过程中实时翻转，避免气泡在中途溢出
+    updateBubblePosition();
   }
 
   function onUp() {
@@ -1160,6 +1204,7 @@ function makeMascotDraggable() {
       const rect = container.getBoundingClientRect();
       localStorage.setItem(STORE.mascot, JSON.stringify({ x: rect.left, y: rect.top }));
     }
+    updateBubblePosition();
   }
 
   mascot.addEventListener('mousedown', onDown);
@@ -1168,6 +1213,9 @@ function makeMascotDraggable() {
   mascot.addEventListener('touchstart', onDown, { passive: false });
   document.addEventListener('touchmove', onMove, { passive: false });
   document.addEventListener('touchend', onUp);
+
+  // 屏幕尺寸变化（旋转 / 调整窗口）后，原位置可能落到屏幕外或跨越中线，重新判定朝向
+  window.addEventListener('resize', updateBubblePosition);
 }
 
 // ---------- 图生图上传处理 ----------
@@ -1229,6 +1277,147 @@ function convertImage() {
     }, mime, format === 'png' ? undefined : quality);
   };
   img.src = convImageData;
+}
+
+// ---------- 视频格式转换（ffmpeg.wasm 单线程版，纯前端） ----------
+
+// ffmpeg.wasm 单线程核心不依赖 SharedArrayBuffer，无需 COOP/COEP 头，
+// 在 GitHub Pages 上可直接运行。首次使用按需加载约 30MB 引擎。
+const FFMPEG_CFG = {
+  ffmpegJS: 'https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
+  utilJS: 'https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js',
+  coreBase: 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd'
+};
+
+let ffmpegInstance = null;
+let ffmpegLoading = null;
+let vconvFile = null;
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = () => resolve();
+    s.onerror = () => reject(new Error('script load failed: ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+async function loadFFmpeg() {
+  if (ffmpegInstance) return ffmpegInstance;
+  if (ffmpegLoading) return ffmpegLoading;
+
+  ffmpegLoading = (async () => {
+    // 串行加载两个 UMD 包，全局名为 FFmpegWASM / FFmpegUtil
+    await loadScript(FFMPEG_CFG.ffmpegJS);
+    await loadScript(FFMPEG_CFG.utilJS);
+
+    const { FFmpeg } = window.FFmpegWASM;
+    const { toBlobURL } = window.FFmpegUtil;
+
+    const ffmpeg = new FFmpeg();
+    // toBlobURL 把远程脚本/wasm 抓成 blob: URL，规避 worker 跨域与 MIME 限制
+    const coreURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.js', 'text/javascript');
+    const wasmURL = await toBlobURL(FFMPEG_CFG.coreBase + '/ffmpeg-core.wasm', 'application/wasm');
+
+    await ffmpeg.load({ coreURL, wasmURL });
+    ffmpegInstance = ffmpeg;
+    return ffmpeg;
+  })();
+
+  return ffmpegLoading;
+}
+
+function formatBytes(n) {
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+async function handleVconvUpload(file) {
+  if (!file || !file.type.startsWith('video/')) return;
+  vconvFile = file;
+  const drop = $('vconvDrop');
+  drop.classList.add('dragover');
+  drop.textContent = file.name + ' · ' + formatBytes(file.size);
+  // 预览：URL.createObjectURL 是同步的，可直接赋给 video.src
+  const video = $('vconvPreviewVideo');
+  video.src = URL.createObjectURL(file);
+  $('vconvPreview').classList.remove('hidden');
+}
+
+async function convertVideo() {
+  if (!vconvFile) return;
+  const format = $('vconvFormat').value;
+  const crf = $('vconvQuality').value; // 18 / 23 / 28
+  const btn = $('vconvBtn');
+  const hint = $('vconvHint');
+
+  btn.disabled = true;
+  btn.textContent = t('tool.loadingEngine');
+  hint.textContent = t('tool.loadingEngine');
+
+  try {
+    const ffmpeg = await loadFFmpeg();
+    btn.textContent = t('tool.converting');
+    hint.textContent = t('tool.converting');
+
+    const ext = (vconvFile.name.split('.').pop() || 'mp4').toLowerCase();
+    const inputName = 'input.' + ext;
+    const outputName = 'output.' + format;
+
+    // fetchFile 来自 @ffmpeg/util，会把 File/ABlob 读成 Uint8Array
+    const { fetchFile } = window.FFmpegUtil;
+    await ffmpeg.writeFile(inputName, await fetchFile(vconvFile));
+
+    // 不同输出格式的命令：
+    //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
+    //   webm - libvpx-vp9 + libopus，CRF 同上语义
+    //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
+    let args;
+    if (format === 'gif') {
+      // 两遍法：先生成调色板，再用调色板转 gif，能显著减少色阶断层/马赛克
+      const palette = 'palette.png';
+      const paletteFilter = 'fps=10,scale=480:-1:flags=lanczos,palettegen';
+      const useFilter = 'fps=10,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse';
+      await ffmpeg.exec('-i', inputName, '-vf', paletteFilter, palette);
+      await ffmpeg.exec('-i', inputName, '-i', palette, '-lavfi', useFilter, outputName);
+      try { await ffmpeg.deleteFile(palette); } catch (_) {}
+    } else if (format === 'webm') {
+      args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-crf', crf, '-b:v', '0',
+              '-c:a', 'libopus', '-pix_fmt', 'yuv420p', outputName];
+      await ffmpeg.exec(...args);
+    } else {
+      // mp4 / h.264：-pix_fmt yuv420p 保证浏览器可播；-movflags +faststart 改善流播
+      args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium',
+              '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
+              '-movflags', '+faststart', outputName];
+      await ffmpeg.exec(...args);
+    }
+
+    const data = await ffmpeg.readFile(outputName);
+    const mime = format === 'webm' ? 'video/webm' : format === 'gif' ? 'image/gif' : 'video/mp4';
+    const blob = new Blob([data.buffer || data], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'converted.' + format;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+
+    // 清理虚拟文件系统，避免占用内存
+    try { await ffmpeg.deleteFile(inputName); } catch (_) {}
+    try { await ffmpeg.deleteFile(outputName); } catch (_) {}
+
+    hint.textContent = '';
+    toast(t('tool.done'));
+  } catch (e) {
+    console.error('[video convert]', e);
+    hint.textContent = t('tool.convertFail');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = t('tool.convert');
+  }
 }
 
 // ---------- 启动 ----------

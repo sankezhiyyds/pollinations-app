@@ -271,6 +271,37 @@
           </div>
         </div>
 
+        <div class="tool-card">
+          <h3 data-i18n="tool.videoConvertTitle">视频格式转换</h3>
+          <div id="vconvDrop" class="drop-zone" data-i18n="tool.videoConvertHint">
+            点击或拖入视频
+          </div>
+          <div id="vconvPreview" class="hidden" style="margin-top:12px">
+            <video id="vconvPreviewVideo" class="vconv-preview" controls playsinline></video>
+            <div class="row" style="margin:10px 0">
+              <div class="grow">
+                <label class="lbl" data-i18n="tool.format">输出格式</label>
+                <select id="vconvFormat" class="select">
+                  <option value="mp4">MP4 · H.264</option>
+                  <option value="webm">WebM · VP9</option>
+                  <option value="gif">GIF</option>
+                </select>
+              </div>
+              <div class="grow" id="vconvQualityRow">
+                <label class="lbl" data-i18n="tool.vquality">质量</label>
+                <select id="vconvQuality" class="select">
+                  <option value="18" data-i18n="tool.qHigh">高（无可见损失）</option>
+                  <option value="23" selected data-i18n="tool.qMedium">中（默认）</option>
+                  <option value="28" data-i18n="tool.qLow">低（文件更小）</option>
+                </select>
+              </div>
+            </div>
+            <p class="warn" data-i18n="tool.videoWarn">视频转码在浏览器本地进行，不依赖服务器；首次使用需加载约 30MB 引擎，文件较大时较慢，请耐心等待</p>
+            <button id="vconvBtn" class="btn primary" data-i18n="tool.convert">转换并下载</button>
+            <p id="vconvHint" class="hint"></p>
+          </div>
+        </div>
+
       </div>
     </section>
 
