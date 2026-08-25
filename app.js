@@ -1353,9 +1353,14 @@ async function loadFFmpeg() {
 
     // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截
     const ffmpeg = new FFmpeg();
+    ffmpeg.on('log', ({ message }) => console.log('[ffmpeg log]', message));
+    ffmpeg.on('progress', ({ progress }) => console.log('[ffmpeg progress]', (progress * 100).toFixed(1) + '%'));
     await ffmpeg.load({
       coreURL: coreBase + 'ffmpeg-core.js',
       wasmURL: FFMPEG_CFG.wasmURL
+    }).catch(e => {
+      console.error('[ffmpeg load failed]', e);
+      throw e;
     });
     ffmpegInstance = ffmpeg;
     return ffmpeg;
@@ -1473,7 +1478,9 @@ async function convertVideo() {
     toast(t('tool.done'));
   } catch (e) {
     console.error('[video convert]', e);
-    hint.textContent = t('tool.videoConvertFail');
+    const msg = e && e.message ? e.message : String(e);
+    console.error('[video convert] full:', e);
+    hint.textContent = t('tool.videoConvertFail') + ' (' + msg.slice(0, 80) + ')';
   } finally {
     btn.disabled = false;
     btn.textContent = t('tool.convert');
