@@ -313,6 +313,9 @@ function fillSelect(sel, list, preferred) {
 
 // ---------- 图片生成 ----------
 
+// 图片是 <img> 直连，无法带请求头，官方支持用 ?key= 传递认证
+// gen.pollinations.ai/image 新版端点支持 ?key= 且尊重 width/height（返回全分辨率）
+// image.pollinations.ai 旧版端点对 flux 等模型强制降分辨率至 768px
 function buildImageUrl(prompt, opts) {
   const p = new URLSearchParams();
   p.set('model', opts.model);
@@ -322,10 +325,8 @@ function buildImageUrl(prompt, opts) {
   if (opts.nologo) p.set('nologo', 'true');
   if (opts.enhance) p.set('enhance', 'true');
   if (opts.priv) p.set('private', 'true');
-  // 图片是 <img> 直连，无法带请求头，官方支持用 ?key= 传递
   if (state.apiKey) p.set('key', state.apiKey);
   else p.set('referrer', location.hostname || 'localhost');
-
   return API.base + '/image/' + encodeURIComponent(prompt) + '?' + p.toString();
 }
 
@@ -445,16 +446,16 @@ async function generateImage(reuseSeed) {
 
   try {
     // 图生图模式只走旧版端点（kontext + image 参数）
-    // 新版端点 gen.pollinations.ai/image 有 Key 时直接返回高质量图，不再降分辨率
+    // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版端点
     const got = isEditMode
       ? await loadImage(legacy)
       : state.apiKey
-        ? await loadImageWithFallback(buildImageUrl(prompt, opts), legacy)
+        ? await loadImage(buildImageUrl(prompt, opts))
         : await loadImage(legacy);
     const url = got.url;
     const secs = ((Date.now() - started) / 1000).toFixed(1);
 
-    // 新版端点 gen.pollinations.ai/image 会尊重 width/height 参数，不再降分辨率
+    // 新版端点 gen.pollinations.ai/image 会尊重 width/height 参数
     const realW = got.w || width;
     const realH = got.h || height;
 
@@ -642,21 +643,6 @@ function loadImage(url) {
     img.onload = () => resolve({ url, w: img.naturalWidth, h: img.naturalHeight });
     img.onerror = () => reject(new Error('image load failed'));
     img.src = url;
-  });
-}
-
-// 先试新版端点，失败自动回退旧版，两边都挂才算失败
-function loadImageWithFallback(primary, fallback) {
-  return new Promise((resolve, reject) => {
-    const first = new Image();
-    first.onload = () => resolve({ url: primary, w: first.naturalWidth, h: first.naturalHeight });
-    first.onerror = () => {
-      const second = new Image();
-      second.onload = () => resolve({ url: fallback, w: second.naturalWidth, h: second.naturalHeight });
-      second.onerror = () => reject(new Error('both endpoints failed'));
-      second.src = fallback;
-    };
-    first.src = primary;
   });
 }
 
