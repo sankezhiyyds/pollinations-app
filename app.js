@@ -1336,6 +1336,7 @@ async function fetchFile(input) {
 
 let ffmpegInstance = null;
 let ffmpegLoading = null;
+let ffmpegLastActivity = 0;
 let vconvFile = null;
 
 async function loadFFmpeg() {
@@ -1353,8 +1354,14 @@ async function loadFFmpeg() {
 
     // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截
     const ffmpeg = new FFmpeg();
-    ffmpeg.on('log', ({ message }) => console.log('[ffmpeg log]', message));
-    ffmpeg.on('progress', ({ progress }) => console.log('[ffmpeg progress]', (progress * 100).toFixed(1) + '%'));
+    ffmpeg.on('log', ({ message }) => {
+      ffmpegLastActivity = Date.now();
+      console.log('[ffmpeg log]', message);
+    });
+    ffmpeg.on('progress', ({ progress }) => {
+      ffmpegLastActivity = Date.now();
+      console.log('[ffmpeg progress]', (progress * 100).toFixed(1) + '%');
+    });
     await ffmpeg.load({
       coreURL: coreBase + 'ffmpeg-core.js',
       wasmURL: FFMPEG_CFG.wasmURL
@@ -1367,6 +1374,31 @@ async function loadFFmpeg() {
   })();
 
   return ffmpegLoading;
+}
+
+// wasm 发生致命错误（如 memory access out of bounds）后 worker 不再回包，
+// exec() 的 promise 会永远 pending。用看门狗检测"心跳停止"并主动 reject。
+function execWatched(ffmpeg, args, idleMs = 60000) {
+  ffmpegLastActivity = Date.now();
+  let timer;
+  const watchdog = new Promise((_, reject) => {
+    timer = setInterval(() => {
+      if (Date.now() - ffmpegLastActivity > idleMs) {
+        clearInterval(timer);
+        reject(new Error('ffmpeg worker 无响应（引擎可能已崩溃），请重试'));
+      }
+    }, 2000);
+  });
+  return Promise.race([ffmpeg.exec(args), watchdog]).finally(() => clearInterval(timer));
+}
+
+// 致命错误后销毁实例，下次转换重新加载全新引擎
+function resetFFmpeg() {
+  if (ffmpegInstance) {
+    try { ffmpegInstance.terminate(); } catch (_) {}
+  }
+  ffmpegInstance = null;
+  ffmpegLoading = null;
 }
 
 function formatBytes(n) {
@@ -1412,7 +1444,8 @@ async function convertVideo() {
 
     // 不同输出格式的命令：
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
-    //   webm - libvpx-vp9 + libopus，CRF 同上语义
+    //   webm - libvpx(VP8) + libvorbis；注意不能用 libvpx-vp9，
+    //          单线程 ffmpeg.wasm 编 VP9 会触发 memory access out of bounds（已知问题 #679）
     //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
     //   webp - 抽帧导出单张 WebP（Canvas API 原生支持，无需 ffmpeg）
     let args;
@@ -1421,17 +1454,17 @@ async function convertVideo() {
       const palette = 'palette.png';
       const paletteFilter = 'fps=10,scale=480:-1:flags=lanczos,palettegen';
       const useFilter = 'fps=10,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse';
-      await ffmpeg.exec(['-i', inputName, '-vf', paletteFilter, palette]);
-      await ffmpeg.exec(['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
+      await execWatched(ffmpeg, ['-i', inputName, '-vf', paletteFilter, palette]);
+      await execWatched(ffmpeg, ['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
       try { await ffmpeg.deleteFile(palette); } catch (_) {}
     } else if (format === 'webm') {
-      args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-crf', crf, '-b:v', '0',
-              '-c:a', 'libopus', '-pix_fmt', 'yuv420p', outputName];
-      await ffmpeg.exec(args);
+      args = ['-i', inputName, '-c:v', 'libvpx', '-crf', crf, '-b:v', '0',
+              '-c:a', 'libvorbis', '-pix_fmt', 'yuv420p', outputName];
+      await execWatched(ffmpeg, args);
     } else if (format === 'webp') {
       // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
       const frameName = 'frame.jpg';
-      await ffmpeg.exec(['-i', inputName, '-frames:v', '1', '-q:v', '5', frameName]);
+      await execWatched(ffmpeg, ['-i', inputName, '-frames:v', '1', '-q:v', '5', frameName]);
       const frameData = await ffmpeg.readFile(frameName);
       try { await ffmpeg.deleteFile(frameName); } catch (_) {}
       const img = await blobToImage(new Blob([frameData.buffer || frameData], { type: 'image/jpeg' }));
@@ -1459,7 +1492,7 @@ async function convertVideo() {
       args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium',
               '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
               '-movflags', '+faststart', outputName];
-      await ffmpeg.exec(args);
+      await execWatched(ffmpeg, args);
     }
 
     const data = await ffmpeg.readFile(outputName);
@@ -1482,6 +1515,10 @@ async function convertVideo() {
     console.error('[video convert]', e);
     const msg = e && e.message ? e.message : String(e);
     console.error('[video convert] full:', e);
+    // wasm 致命错误（RuntimeError / worker 无响应）后引擎已不可用，销毁以便下次重建
+    if (e instanceof Error && (e.name === 'RuntimeError' || /无响应|Aborted/i.test(msg))) {
+      resetFFmpeg();
+    }
     hint.textContent = t('tool.videoConvertFail') + ' (' + msg.slice(0, 80) + ')';
   } finally {
     btn.disabled = false;
