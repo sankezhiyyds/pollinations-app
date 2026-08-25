@@ -1284,12 +1284,13 @@ function convertImage() {
 // ---------- 视频格式转换（ffmpeg.wasm，纯前端） ----------
 //
 // 技术决策（GitHub Pages + Tracking Prevention 兼容）：
-//   @ffmpeg/ffmpeg@0.12.x 内部通过 new Worker(classWorkerURL) 加载 worker chunk。
-//   若 classWorkerURL 指向 CDN 的跨域地址，部分浏览器（Edge/Safari 的
-//   Tracking Prevention）会拦截跨域 Worker 构造，抛 SecurityError。
-//   规避方案：用 toBlobURL 预先把 worker chunk / core / wasm 三个远程文件
-//   fetch 成本地同源 blob: URL，再交给 ffmpeg.load()。同源 blob Worker 不会
-//   被隐私拦截，从根本上解决 “Failed to construct 'Worker'” 问题。
+//   ffmpeg.wasm 0.12.x 必须在 Worker 里运行 wasm，而浏览器禁止「跨域构造 Worker」
+//   （SecurityError，与 CORS 无关，换任何 CDN 源都一样被拦）。
+//   解决：把 ffmpeg.js / worker chunk(814.ffmpeg.js) / core(ffmpeg-core.js) 三个
+//   小文件本地化到 vendor/ffmpeg/，随站点同源部署。这样 ffmpeg.js 同源 →
+//   内部 new Worker 也同源，importScripts(core) 同源，彻底绕开跨域拦截。
+//   wasm（约 32MB）不塞进仓库，单独走 CDN：它通过 fetch 加载（带 CORS），
+//   跨域可正常加载。
 //
 //   @ffmpeg/core@0.12.10（单线程 UMD）无需 SharedArrayBuffer，不要求 COOP/COEP，
 //   纯静态 GitHub Pages 即可运行。
@@ -1297,15 +1298,13 @@ function convertImage() {
 // 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧导出单张图）
 
 const FFMPEG_CFG = {
-  // 主类 UMD：加载后挂到 window.FFmpegWASM（含 FFmpeg 类）
-  ffmpegJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
-  // worker chunk：0.12.x 内部 new Worker 的目标，必须转成同源 blob 规避跨域拦截
-  workerURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js',
-  // 核心必须用 ESM 构建：传入 classWorkerURL 后 worker 以 module 方式运行，
-  // importScripts 不可用，会走 import(coreURL).default 兜底；UMD 无 default 导出
-  //   → 报 "failed to import ffmpeg-core.js"。故改用 dist/esm，末尾是 export default。
-  coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js',
-  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm'
+  // 主类 UMD（已本地化到 vendor/ffmpeg/，同源加载 → 内部 new Worker 也走同源，
+  //   从根上规避浏览器对「跨域 Worker 构造」的拦截，这正是问题根源，与 CDN 源无关）
+  ffmpegJS: './vendor/ffmpeg/ffmpeg.js',
+  // 核心（core.js / worker chunk 均本地化，经典 worker 里 importScripts 同源执行）
+  coreBase: './vendor/ffmpeg/',
+  // wasm 单独走 CDN：它通过 fetch 加载（带 CORS），跨域可通；32MB 不塞进仓库
+  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm'
 };
 
 // 动态注入 <script>，加载 UMD 包（幂等：同一 src 只加载一次）
@@ -1321,20 +1320,7 @@ function loadScript(src) {
   });
 }
 
-// @ffmpeg/util 的 UMD 包在浏览器 <script> 环境下会抛 "exports is not defined"
-// （其内部引用了 CommonJS 的 exports），无法挂载 window.FFmpegUtil。
-// 它只提供两个很简单的工具函数，这里自行实现，彻底去掉该依赖。
-
-// 把远程资源 fetch 成同源 blob: URL（等价于 @ffmpeg/util 的 toBlobURL）
-async function toBlobURL(src, mimeType) {
-  const resp = await fetch(src);
-  if (!resp.ok) throw new Error('fetch failed(' + resp.status + '): ' + src);
-  const buf = await resp.arrayBuffer();
-  const blob = new Blob([buf], { type: mimeType });
-  return URL.createObjectURL(blob);
-}
-
-// 把 File/Blob/URL 读成 Uint8Array（等价于 @ffmpeg/util 的 fetchFile）
+// 把 File/Blob 读成 Uint8Array（供 ffmpeg.writeFile 使用）
 async function fetchFile(input) {
   if (input instanceof Blob) {
     return new Uint8Array(await input.arrayBuffer());
@@ -1357,22 +1343,20 @@ async function loadFFmpeg() {
   if (ffmpegLoading) return ffmpegLoading;
 
   ffmpegLoading = (async () => {
-    // 1) 加载主类 UMD，暴露 window.FFmpegWASM（工具函数已自实现，无需 util 包）
+    // 1) 加载主类 UMD（同源），暴露 window.FFmpegWASM
     await loadScript(FFMPEG_CFG.ffmpegJS);
 
     const { FFmpeg } = window.FFmpegWASM;
 
-    // 2) 把 worker / core / wasm 三个远程文件转成同源 blob: URL
-    //    —— 这一步是绕过 Tracking Prevention 跨域 Worker 拦截的关键
-    const [classWorkerURL, coreURL, wasmURL] = await Promise.all([
-      toBlobURL(FFMPEG_CFG.workerURL, 'text/javascript'),
-      toBlobURL(FFMPEG_CFG.coreURL, 'text/javascript'),
-      toBlobURL(FFMPEG_CFG.wasmURL, 'application/wasm')
-    ]);
+    // 2) core 用绝对同源 URL（importScripts 的相对基准是 worker 目录，不能用相对路径）
+    const coreBase = new URL(FFMPEG_CFG.coreBase, location.href).href;
 
-    // 3) 用同源 blob URL 初始化，内部 new Worker 也走同源 blob，不再被拦截
+    // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截
     const ffmpeg = new FFmpeg();
-    await ffmpeg.load({ coreURL, wasmURL, classWorkerURL });
+    await ffmpeg.load({
+      coreURL: coreBase + 'ffmpeg-core.js',
+      wasmURL: FFMPEG_CFG.wasmURL
+    });
     ffmpegInstance = ffmpeg;
     return ffmpeg;
   })();
