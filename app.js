@@ -326,7 +326,7 @@ function buildImageUrl(prompt, opts) {
   if (state.apiKey) p.set('key', state.apiKey);
   else p.set('referrer', location.hostname || 'localhost');
 
-  return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
+  return API.base + '/image/' + encodeURIComponent(prompt) + '?' + p.toString();
 }
 
 function buildLegacyImageUrl(prompt, opts) {
@@ -445,7 +445,7 @@ async function generateImage(reuseSeed) {
 
   try {
     // 图生图模式只走旧版端点（kontext + image 参数）
-    // 实测：gen.pollinations.ai/image 强制要 Key，匿名必定 401
+    // 新版端点 gen.pollinations.ai/image 有 Key 时直接返回高质量图，不再降分辨率
     const got = isEditMode
       ? await loadImage(legacy)
       : state.apiKey
@@ -454,7 +454,7 @@ async function generateImage(reuseSeed) {
     const url = got.url;
     const secs = ((Date.now() - started) / 1000).toFixed(1);
 
-    // 实测服务端会按模型能力调整尺寸(如请求 1024 实返 768)，所以显示真实值
+    // 新版端点 gen.pollinations.ai/image 会尊重 width/height 参数，不再降分辨率
     const realW = got.w || width;
     const realH = got.h || height;
 
