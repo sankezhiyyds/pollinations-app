@@ -1301,9 +1301,11 @@ const FFMPEG_CFG = {
   ffmpegJS: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js',
   // worker chunk：0.12.x 内部 new Worker 的目标，必须转成同源 blob 规避跨域拦截
   workerURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/dist/umd/814.ffmpeg.js',
-  // 单线程 core（无 SharedArrayBuffer 依赖）
-  coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js',
-  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm'
+  // 核心必须用 ESM 构建：传入 classWorkerURL 后 worker 以 module 方式运行，
+  // importScripts 不可用，会走 import(coreURL).default 兜底；UMD 无 default 导出
+  //   → 报 "failed to import ffmpeg-core.js"。故改用 dist/esm，末尾是 export default。
+  coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.js',
+  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/esm/ffmpeg-core.wasm'
 };
 
 // 动态注入 <script>，加载 UMD 包（幂等：同一 src 只加载一次）
