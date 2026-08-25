@@ -1434,12 +1434,14 @@ async function convertVideo() {
       await ffmpeg.exec(['-i', inputName, '-frames:v', '1', '-q:v', '5', frameName]);
       const frameData = await ffmpeg.readFile(frameName);
       try { await ffmpeg.deleteFile(frameName); } catch (_) {}
-      const img = await blobToImage(new Blob([frameData.buffer || frameData]));
+      const img = await blobToImage(new Blob([frameData.buffer || frameData], { type: 'image/jpeg' }));
       const c = document.createElement('canvas');
       c.width = img.naturalWidth;
       c.height = img.naturalHeight;
       c.getContext('2d').drawImage(img, 0, 0);
-      const quality = Number($('vconvQuality').value) / 100;
+      // 下拉框的 value 是 CRF 语义（越小越好），需反向映射为 toBlob 的 quality（越大越好）
+      const crfToQuality = { '18': 0.92, '23': 0.8, '28': 0.6 };
+      const quality = crfToQuality[$('vconvQuality').value] || 0.8;
       const blob = await new Promise((resolve, reject) => {
         c.toBlob(b => b ? resolve(b) : reject(new Error('canvas webp export failed')), 'image/webp', quality);
       });
