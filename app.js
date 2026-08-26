@@ -12,9 +12,12 @@
 // ============================================================
 
 const API = {
+  // 主域名；若 DNS 解析失败会回退到备用
   get base() { return 'https://gen.pollinations.ai'; },
   get legacyImage() { return 'https://image.pollinations.ai'; },
-  get legacyText() { return 'https://text.pollinations.ai'; }
+  get legacyText() { return 'https://text.pollinations.ai'; },
+  // 备用域名（cloudflare 镜像）
+  get fallbackBase() { return 'https://pollinations.ai'; }
 };
 
 const STORE = {
@@ -285,8 +288,10 @@ async function loadModels() {
   updateAudioModelSelect();
   updateVideoModelSelect();
 
+  const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
+
   try {
-    const res = await fetch(API.base + '/image/models', { headers: authHeaders() });
+    const res = await Promise.race([fetch(API.base + '/image/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
@@ -295,7 +300,7 @@ async function loadModels() {
   } catch (e) { /* 静默回退 */ }
 
   try {
-    const res = await fetch(API.base + '/v1/models', { headers: authHeaders() });
+    const res = await Promise.race([fetch(API.base + '/v1/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
@@ -304,7 +309,7 @@ async function loadModels() {
   } catch (e) { /* 静默回退 */ }
 
   try {
-    const res = await fetch(API.base + '/audio/models', { headers: authHeaders() });
+    const res = await Promise.race([fetch(API.base + '/audio/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
@@ -313,7 +318,7 @@ async function loadModels() {
   } catch (e) { /* 静默回退 */ }
 
   try {
-    const res = await fetch(API.base + '/video/models', { headers: authHeaders() });
+    const res = await Promise.race([fetch(API.base + '/video/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
@@ -621,6 +626,7 @@ async function generateImage(reuseSeed) {
   try {
     // 图生图：POST 到 image.pollinations.ai/prompt（避免 GET URI 超长）
     // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版 GET 端点
+    const legacy = buildLegacyImageUrl(prompt, opts);
     const got = isEditMode
       ? await loadImageFromPost(prompt, imgEditImageData, opts)
       : state.apiKey
