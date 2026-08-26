@@ -29,7 +29,9 @@ const STORE = {
 };
 
 const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
-const FREE_IMAGE_MODELS = ['flux', 'turbo'];
+// 匿名档位服务端实际只授权 sana（image.pollinations.ai/models 返回 ["sana"]）；
+// 请求 flux / turbo 不会报错，而是被静默替换成 sana，所以免费列表只列 sana
+const FREE_IMAGE_MODELS = ['sana'];
 const PREMIUM_IMAGE_MODELS = ['kontext', 'gptimage', 'seedream', 'klein', 'gptimage-large', 'gpt-image-2', 'nova-canvas', 'dreamshaper', 'zimage'];
 const FALLBACK_TEXT_MODELS = ['openai', 'openai-fast', 'openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
 const FREE_TEXT_MODELS = ['openai', 'openai-fast'];
@@ -299,11 +301,13 @@ async function loadModels() {
   const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
 
   try {
-    const res = await Promise.race([fetch(API.base + '/image/models', { headers: authHeaders() }), timeout(5000)]);
+    // 匿名时新版端点会 401，用旧版端点查真实授权（匿名通常只返回 ["sana"]）
+    const modelsUrl = state.apiKey ? API.base + '/image/models' : API.legacyImage + '/models';
+    const res = await Promise.race([fetch(modelsUrl, { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length && state.apiKey) updateImageModelSelect(list);
+      if (list.length) updateImageModelSelect(list);
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -335,8 +339,12 @@ async function loadModels() {
   } catch (e) { /* 静默回退 */ }
 }
 
-const IMG_RATIO_FREE = ['512x512','768x768','1024x1024','1024x768','768x1024','1280x720','720x1280'];
+// 匿名档位服务端按「总像素面积」封顶在 589824 px（=768×768），
+// 超出就会被等比缩小改写（1024×1024→768×768、1024×768→886×665）。
+// 所以免费列表只放面积在上限内、能被精确兑现的尺寸。
+const IMG_RATIO_FREE = ['512x512','768x768','880x660','660x880','1024x576','576x1024'];
 const IMG_RATIO_PREMIUM = ['512x512','768x768','1024x1024','1024x768','768x1024','1280x720','720x1280','1536x1024','1024x1536','2048x1024','1024x2048','2048x2048'];
+const FREE_PIXEL_BUDGET = 768 * 768;
 
 function updateImageModelSelect(apiList) {
   const sel = $('imgModel');
@@ -353,9 +361,10 @@ function updateImageModelSelect(apiList) {
     ratioHint.style.color = 'var(--ok)';
   } else {
     // 未登录：只显示免费模型
-    fillSelect(sel, FREE_IMAGE_MODELS, 'flux');
-    fillRatioSelect(ratioSel, IMG_RATIO_FREE, '1024x1024');
-    ratioHint.textContent = '';
+    fillSelect(sel, FREE_IMAGE_MODELS, 'sana');
+    fillRatioSelect(ratioSel, IMG_RATIO_FREE, '768x768');
+    ratioHint.textContent = t('img.ratioFree');
+    ratioHint.style.color = '';
   }
   updateModelHint();
 }
@@ -366,6 +375,10 @@ function fillRatioSelect(sel, ratios, preferred) {
   const ratioLabels = {
     '512x512': '1:1 · 512×512',
     '768x768': '1:1 · 768×768',
+    '880x660': '4:3 · 880×660',
+    '660x880': '3:4 · 660×880',
+    '1024x576': '16:9 · 1024×576',
+    '576x1024': '9:16 · 576×1024',
     '1024x1024': '1:1 · 1024×1024',
     '1024x768': '4:3 · 1024×768',
     '768x1024': '3:4 · 768×1024',
@@ -539,20 +552,6 @@ function buildLegacyImageUrl(prompt, opts) {
   return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
 }
 
-// 图生图：kontext 模型通过 image 参数接收输入图
-function buildEditImageUrl(prompt, imageUrl, opts) {
-  const p = new URLSearchParams();
-  p.set('model', 'kontext');
-  p.set('image', imageUrl);
-  p.set('width', opts.width);
-  p.set('height', opts.height);
-  p.set('seed', opts.seed);
-  if (opts.nologo) p.set('nologo', 'true');
-  if (state.apiKey) p.set('key', state.apiKey);
-  else p.set('referrer', location.hostname || 'localhost');
-  return API.legacyImage + '/prompt/' + encodeURIComponent(prompt) + '?' + p.toString();
-}
-
 // 文件转 data URL
 function fileToDataURL(file) {
   return new Promise((resolve, reject) => {
@@ -599,9 +598,24 @@ async function generateImage(reuseSeed) {
     $('imgHint').textContent = t('img.needImage');
     return;
   }
+  // 图生图 kontext 官方要求必须带 API Key；匿名请求会被静默换成占位图
+  if (isEditMode && !state.apiKey) {
+    $('imgHint').textContent = t('img.editNeedKey');
+    toast(t('img.editNeedKey'));
+    return;
+  }
 
   const model = isEditMode ? 'kontext' : $('imgModel').value;
   let [width, height] = $('imgRatio').value.split('x').map(Number);
+
+  // 匿名档位有总像素上限，超了服务端会静默改写尺寸。
+  // 这里先等比缩到上限内，让显示尺寸和实际拿到的一致。
+  if (!state.apiKey && width * height > FREE_PIXEL_BUDGET) {
+    const k = Math.sqrt(FREE_PIXEL_BUDGET / (width * height));
+    width = Math.round(width * k);
+    height = Math.round(height * k);
+    toast(t('img.freePixelCap', { w: width, h: height }));
+  }
 
   // seedream 官方要求最小 960×960
   if (model === 'seedream' && (width < 960 || height < 960)) {
@@ -638,12 +652,12 @@ async function generateImage(reuseSeed) {
   const started = Date.now();
 
   try {
-    // 图生图：POST 到 image.pollinations.ai/prompt（避免 GET URI 超长）
-    // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版 GET 端点
+    // 图生图：走官方 /v1/images/edits（multipart，必须带 key）
+    // 文生图：有 key 走新版端点（尊重 width/height），无 key 走旧版 GET 端点
     const legacy = buildLegacyImageUrl(prompt, opts);
     let got;
     if (isEditMode) {
-      got = await loadImageFromPost(prompt, imgEditImageData, opts);
+      got = await loadImageFromEdit(prompt, imgEditImageData, opts);
     } else if (state.apiKey) {
       const apiUrl = buildImageUrl(prompt, opts);
       got = await loadImage(apiUrl);
@@ -665,7 +679,12 @@ async function generateImage(reuseSeed) {
       '<img class="result-img" alt="' + escapeHtml(prompt) + '" src="' + url + '">';
     $('imgActions').classList.remove('hidden');
     $('imgMeta').textContent = model + ' · ' + realW + '×' + realH + ' · seed ' + seed + ' · ' + secs + 's';
-    $('imgHint').textContent = t('img.done');
+    // 实际返回尺寸和所选不一致时明确告知（匿名用旧端点会被降到 768）
+    if (realW !== width || realH !== height) {
+      $('imgHint').textContent = t('img.sizeDowngrade', { w: realW, h: realH, rw: width, rh: height });
+    } else {
+      $('imgHint').textContent = t('img.done');
+    }
 
     state.lastImage = { url, apiUrl: apiUrl || url, prompt, model, width: realW, height: realH, seed };
     // 图生图 apiUrl 为 null（无法复现 GET URL），历史记录用当前显示 url（blob 在同一会话可见，刷新后失效）
@@ -674,9 +693,17 @@ async function generateImage(reuseSeed) {
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
   } catch (e) {
-    // 图片走 <img> 加载，拿不到状态码；任何用户都可能被限流
-    const msg = state.apiKey ? t('img.fail') : t('img.rate');
-    $('imgStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    // 图生图走 fetch，能拿到真实错误信息；文生图走 <img>，拿不到状态码
+    let msg;
+    if (isEditMode) {
+      msg = e && e.status === 401 ? t('img.editNeedKey')
+          : e && e.status === 402 ? t('img.noBalance')
+          : (e && e.message) ? t('img.fail') + '（' + e.message + '）'
+          : t('img.fail');
+    } else {
+      msg = state.apiKey ? t('img.fail') : t('img.rate');
+    }
+    $('imgStage').innerHTML = '<div class="stage-empty">' + escapeHtml(msg) + '</div>';
     $('imgHint').textContent = msg;
     assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
     // 无论是否有 key，都禁用按钮并倒计时
@@ -862,31 +889,55 @@ function updateNeedKeyVisibility() {
   $('videoNeedKey').classList.toggle('hidden', !visible);
 }
 
-// 图生图 POST 请求（避免 GET URI 超长）
-// image.pollinations.ai/prompt POST 返回直接图片二进制流（Content-Type: image/jpeg）
-async function loadImageFromPost(prompt, imageUrl, opts) {
-  const body = {
-    model: 'kontext',
-    prompt: prompt,
-    image: imageUrl,
-    width: opts.width,
-    height: opts.height,
-    seed: opts.seed,
-    nologo: opts.nologo,
-    ...(opts.negative ? { negative: opts.negative } : {})
-  };
-  const headers = { 'Content-Type': 'application/json' };
-  if (state.apiKey) headers['Authorization'] = 'Bearer ' + state.apiKey;
+// data URL 转 Blob，用于 multipart 上传
+function dataURLToBlob(dataUrl) {
+  const [head, b64] = dataUrl.split(',');
+  const mime = (head.match(/:(.*?);/) || [, 'image/jpeg'])[1];
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return new Blob([buf], { type: mime });
+}
 
-  const url = API.legacyImage + '/prompt';
-  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error('HTTP ' + res.status);
+// 图生图：官方 OpenAI 兼容图片编辑端点
+// POST gen.pollinations.ai/v1/images/edits（multipart/form-data）
+// 该端点必须带 API Key；旧的 image.pollinations.ai/prompt POST 会忽略全部参数
+// 并静默返回一张固定 768×768 占位图，所以不能再用
+async function loadImageFromEdit(prompt, imageDataUrl, opts) {
+  const form = new FormData();
+  form.append('image', dataURLToBlob(imageDataUrl), 'input.jpg');
+  form.append('prompt', prompt);
+  form.append('model', 'kontext');
+  form.append('size', opts.width + 'x' + opts.height);
+  form.append('response_format', 'b64_json');
 
-  // 响应是直接图片二进制流，转成 blob URL
-  const blob = await res.blob();
-  const objUrl = URL.createObjectURL(blob);
-  const got = await loadImage(objUrl);
-  got.apiUrl = null; // 图生图无法生成可复现的 GET URL
+  const res = await fetch(API.base + '/v1/images/edits', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + state.apiKey },
+    body: form
+  });
+
+  if (!res.ok) {
+    let detail = 'HTTP ' + res.status;
+    try {
+      const err = await res.json();
+      if (err && err.error && err.error.message) detail = err.error.message;
+    } catch (_) {}
+    const e = new Error(detail);
+    e.status = res.status;
+    throw e;
+  }
+
+  // 返回 CreateImageResponse：{ created, data: [{ url | b64_json }] }
+  const json = await res.json();
+  const item = (json.data && json.data[0]) || {};
+  const src = item.b64_json
+    ? 'data:image/png;base64,' + item.b64_json
+    : item.url;
+  if (!src) throw new Error('empty image response');
+
+  const got = await loadImage(src);
+  got.apiUrl = item.url || null; // b64 结果无可复现的 GET URL
   return got;
 }
 
@@ -1501,7 +1552,9 @@ async function handleImgUpload(file) {
   area.innerHTML = '<div class="spinner" style="width:24px;height:24px"></div>';
   try {
     const raw = await fileToDataURL(file);
-    const resized = await resizeImage(raw, 768);
+    // 现在走 multipart 上传，不再受 URL 长度限制，源图可以留更高分辨率，
+    // 免得输入图本身成为输出尺寸的上限（1024 输出需要足够的源图细节）
+    const resized = await resizeImage(raw, 1536);
     imgEditImageData = resized;
     area.classList.add('has-image');
     area.innerHTML = '<img src="' + resized + '" alt="input"><br><span style="font-size:12px;color:var(--text-soft)" data-i18n="img.changeImage">点击更换</span>';
