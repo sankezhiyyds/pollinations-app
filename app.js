@@ -627,12 +627,20 @@ async function generateImage(reuseSeed) {
     // 图生图：POST 到 image.pollinations.ai/prompt（避免 GET URI 超长）
     // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版 GET 端点
     const legacy = buildLegacyImageUrl(prompt, opts);
-    const got = isEditMode
-      ? await loadImageFromPost(prompt, imgEditImageData, opts)
-      : state.apiKey
-        ? await loadImage(buildImageUrl(prompt, opts))
-        : await loadImage(legacy);
+    let got;
+    if (isEditMode) {
+      got = await loadImageFromPost(prompt, imgEditImageData, opts);
+    } else if (state.apiKey) {
+      const apiUrl = buildImageUrl(prompt, opts);
+      got = await loadImage(apiUrl);
+      got.apiUrl = apiUrl;
+    } else {
+      const apiUrl = legacy;
+      got = await loadImage(apiUrl);
+      got.apiUrl = apiUrl;
+    }
     const url = got.url;
+    const apiUrl = got.apiUrl;
     const secs = ((Date.now() - started) / 1000).toFixed(1);
 
     // 新版端点 gen.pollinations.ai/image 会尊重 width/height 参数
@@ -645,8 +653,8 @@ async function generateImage(reuseSeed) {
     $('imgMeta').textContent = model + ' · ' + realW + '×' + realH + ' · seed ' + seed + ' · ' + secs + 's';
     $('imgHint').textContent = t('img.done');
 
-    state.lastImage = { url, prompt, model, width: realW, height: realH, seed };
-    pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url, at: Date.now() });
+    state.lastImage = { url, apiUrl, prompt, model, width: realW, height: realH, seed };
+    pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: apiUrl, at: Date.now() });
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
   } catch (e) {
@@ -860,7 +868,9 @@ async function loadImageFromPost(prompt, imageUrl, opts) {
   // 响应是直接图片二进制流，转成 blob URL
   const blob = await res.blob();
   const objUrl = URL.createObjectURL(blob);
-  return loadImage(objUrl);
+  const got = await loadImage(objUrl);
+  got.apiUrl = null; // 图生图无法生成可复现的 GET URL
+  return got;
 }
 
 // 单个 URL 加载，回传真实尺寸
@@ -876,7 +886,7 @@ function loadImage(url) {
 async function downloadImage() {
   if (!state.lastImage) return;
   try {
-    const res = await fetch(state.lastImage.url);
+    const res = await fetch(state.lastImage.apiUrl || state.lastImage.url);
     const blob = await res.blob();
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -884,7 +894,7 @@ async function downloadImage() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   } catch (e) {
-    window.open(state.lastImage.url, '_blank');
+    window.open(state.lastImage.apiUrl || state.lastImage.url, '_blank');
   }
 }
 
@@ -1113,7 +1123,7 @@ function renderHistory() {
     }).format(new Date(h.at));
 
     const thumb = h.type === 'image'
-      ? '<img class="hist-thumb" src="' + h.url + '" alt="">'
+      ? '<img class="hist-thumb" src="' + (h.url || '') + '" alt="" loading="lazy">'
       : h.type === 'audio'
         ? '<div class="hist-thumb aud">♪</div>'
         : h.type === 'video'
