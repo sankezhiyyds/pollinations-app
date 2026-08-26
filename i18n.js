@@ -4,6 +4,7 @@ const SUPPORTED = ['zh', 'en', 'ja'];
 const LOCALES = {
   zh: {
     'app.title': 'Pollinations 工坊',
+    'app.powered': '由 <a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a> 驱动',
     'login.title': 'Pollinations 工坊',
     'login.desc': '用你自己的 API Key 登录，Key 只存在你的浏览器里，不会上传到任何第三方服务器。',
     'login.placeholder': '粘贴你的 API Key（sk_ 或 pk_ 开头）',
@@ -187,6 +188,7 @@ const LOCALES = {
 
   en: {
     'app.title': 'Pollinations Studio',
+    'app.powered': 'Powered by <a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a>',
     'login.title': 'Pollinations Studio',
     'login.desc': 'Sign in with your own API key. It stays in your browser and is never sent to any third-party server.',
     'login.placeholder': 'Paste your API key (sk_ or pk_)',
@@ -370,6 +372,7 @@ const LOCALES = {
 
   ja: {
     'app.title': 'Pollinations スタジオ',
+    'app.powered': '<a href="https://pollinations.ai" target="_blank" rel="noopener">Pollinations.ai</a> により提供されています',
     'login.title': 'Pollinations スタジオ',
     'login.desc': '自分の API キーでログインします。キーはブラウザ内にのみ保存され、外部に送信されません。',
     'login.placeholder': 'API キーを貼り付け（sk_ または pk_）',
