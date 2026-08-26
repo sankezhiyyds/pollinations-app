@@ -1467,10 +1467,9 @@ function bindEvents() {
     $('vconvDrop').classList.remove('dragover');
     if (e.dataTransfer.files[0]) handleVconvUpload(e.dataTransfer.files[0]);
   });
-  // 选 GIF 时隐藏质量档（GIF 走调色板两遍法，与 CRF 无关）
-  // WEBP 保留质量档（canvas toBlob quality），并显示"抽帧"说明
+  // 质量档对所有格式都有意义：视频→码率，WEBP→toBlob quality。始终显示。
+  // 仅 WEBP 显示"抽帧导出单张图"说明。
   $('vconvFormat').addEventListener('change', e => {
-    $('vconvQualityRow').classList.toggle('hidden', e.target.value === 'gif');
     $('vconvWebpTip').classList.toggle('hidden', e.target.value !== 'webp');
   });
   $('vconvBtn').addEventListener('click', convertVideo);
@@ -1638,130 +1637,138 @@ function convertImage() {
   img.src = convImageData;
 }
 
-// ---------- 视频格式转换（ffmpeg.wasm，纯前端） ----------
+// ---------- 视频格式转换（浏览器原生 MediaRecorder，纯前端） ----------
 //
-// 技术决策（GitHub Pages + Tracking Prevention 兼容）：
-//   ffmpeg.wasm 0.12.x 必须在 Worker 里运行 wasm，而浏览器禁止「跨域构造 Worker」
-//   （SecurityError，与 CORS 无关，换任何 CDN 源都一样被拦）。
-//   解决：把 ffmpeg.js / worker chunk(814.ffmpeg.js) / core(ffmpeg-core.js) 三个
-//   小文件本地化到 vendor/ffmpeg/，随站点同源部署。这样 ffmpeg.js 同源 →
-//   内部 new Worker 也同源，importScripts(core) 同源，彻底绕开跨域拦截。
-//   wasm（约 32MB）不塞进仓库，单独走 CDN：它通过 fetch 加载（带 CORS），
-//   跨域可正常加载。
+// 技术决策（放弃 ffmpeg.wasm）：
+//   ffmpeg.wasm 在 GitHub Pages 上只能单线程运行（Pages 无法下发 COOP/COEP 头，
+//   开不了 SharedArrayBuffer）。单线程下编码期间不投递事件、大文件极慢，且
+//   webm(VP8/VP9) 会触发内存越界必崩。多轮修补看门狗仍会误报「引擎崩溃」，
+//   故彻底改用浏览器原生方案。
 //
-//   @ffmpeg/core@0.12.10（单线程 UMD）无需 SharedArrayBuffer，不要求 COOP/COEP，
-//   纯静态 GitHub Pages 即可运行。
+//   MediaRecorder + HTMLVideoElement.captureStream()：用浏览器内置的开源编解码器
+//   （VP9/VP8=libvpx、Opus 音频，Chromium/Firefox 均内置；H.264/AAC 视浏览器而定）
+//   边播放边实时录制转码。它不会「静默卡死」，webm 也不再崩溃。
+//   代价：转码耗时≈视频时长（实时录制），但结果稳定、可预期、绝不会假崩溃。
 //
-// 支持格式：MP4 (H.264)、WebM (VP9)、GIF（两遍调色板）、WEBP（抽帧导出单张图）
+// 支持格式：WebM (VP9 / VP8)、MP4 (H.264，视浏览器支持)、WEBP（抽帧导出单张图）
 
-const FFMPEG_CFG = {
-  // 主类 UMD（已本地化到 vendor/ffmpeg/，同源加载 → 内部 new Worker 也走同源，
-  //   从根上规避浏览器对「跨域 Worker 构造」的拦截，这正是问题根源，与 CDN 源无关）
-  ffmpegJS: './vendor/ffmpeg/ffmpeg.js',
-  // 核心（core.js / worker chunk 均本地化，经典 worker 里 importScripts 同源执行）
-  coreBase: './vendor/ffmpeg/',
-  // wasm 单独走 CDN：它通过 fetch 加载（带 CORS），跨域可通；32MB 不塞进仓库
-  wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm'
-};
-
-// 动态注入 <script>，加载 UMD 包（幂等：同一 src 只加载一次）
-function loadScript(src) {
-  return new Promise((resolve, reject) => {
-    if (document.querySelector('script[data-ffmpeg="' + src + '"]')) return resolve();
-    const s = document.createElement('script');
-    s.src = src;
-    s.dataset.ffmpeg = src;
-    s.onload = () => resolve();
-    s.onerror = () => reject(new Error('script load failed: ' + src));
-    document.head.appendChild(s);
-  });
+// 按目标格式挑选浏览器实际支持的 MediaRecorder mimeType（逐个探测，取第一个支持的）
+function pickRecorderMime(format) {
+  const candidates = {
+    'webm-vp9': ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp9', 'video/webm'],
+    'webm-vp8': ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp8', 'video/webm'],
+    'mp4': ['video/mp4;codecs=h264,aac', 'video/mp4;codecs=avc1.42E01E,mp4a.40.2', 'video/mp4']
+  };
+  const list = candidates[format] || [];
+  for (const m of list) {
+    if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+  }
+  return null;
 }
 
-// 把 File/Blob 读成 Uint8Array（供 ffmpeg.writeFile 使用）
-async function fetchFile(input) {
-  if (input instanceof Blob) {
-    return new Uint8Array(await input.arrayBuffer());
-  }
-  if (typeof input === 'string') {
-    const resp = await fetch(input);
-    return new Uint8Array(await resp.arrayBuffer());
-  }
-  if (input instanceof Uint8Array) return input;
-  if (input instanceof ArrayBuffer) return new Uint8Array(input);
-  throw new Error('fetchFile: unsupported input');
+// 触发浏览器下载一个 Blob
+function triggerDownload(blob, filename) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
 }
 
-let ffmpegInstance = null;
-let ffmpegLoading = null;
 let vconvFile = null;
-let vconvProgress = 0; // 最近一次 progress 事件的百分比，供提示行显示
 
-async function loadFFmpeg() {
-  if (ffmpegInstance) return ffmpegInstance;
-  if (ffmpegLoading) return ffmpegLoading;
+// 用 MediaRecorder 实时录制转码：
+//   1) 把上传文件喂进一个隐藏 <video>，captureStream() 拿到音视频轨；
+//   2) MediaRecorder 用目标编解码器（VP9/VP8/H.264）边播边编码；
+//   3) video 播到结尾 → onended → recorder.stop() → 收齐 chunks 合成 Blob。
+// 不存在「静默卡死」：只要视频在播放，录制就在推进；播完必然结束。
+// onProgress(0..1) 用 video 的 currentTime/duration 实时上报，进度真实可见。
+function recordVideoToFormat(file, mimeType, videoBitsPerSecond, onProgress) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.muted = true;              // 必须静音，否则自动播放被浏览器拦截
+    video.playsInline = true;
+    video.preload = 'auto';
+    const srcURL = URL.createObjectURL(file);
+    video.src = srcURL;
 
-  ffmpegLoading = (async () => {
-    // 1) 加载主类 UMD（同源），暴露 window.FFmpegWASM
-    await loadScript(FFMPEG_CFG.ffmpegJS);
+    let recorder = null;
+    let stream = null;
+    let progTimer = null;
+    const chunks = [];
+    let settled = false;
 
-    const { FFmpeg } = window.FFmpegWASM;
+    const cleanup = () => {
+      if (progTimer) clearInterval(progTimer);
+      try { if (recorder && recorder.state !== 'inactive') recorder.stop(); } catch (_) {}
+      try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      try { video.pause(); } catch (_) {}
+      URL.revokeObjectURL(srcURL);
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      if (progTimer) clearInterval(progTimer);
+      // 停止录制并在 onstop 里 resolve（此处不 revoke，交给 onstop 后 cleanup）
+    };
 
-    // 2) core 用绝对同源 URL（importScripts 的相对基准是 worker 目录，不能用相对路径）
-    const coreBase = new URL(FFMPEG_CFG.coreBase, location.href).href;
+    video.onerror = () => fail(new Error('无法解码该视频文件（浏览器不支持此输入格式）'));
 
-    // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截。
-    //    （实测线上版本就是经典 worker 启动成功的，日志能打到 x264 编码器初始化，
-    //     不要改成 module worker——UMD 里 classWorkerURL 的基址解析有上游 bug）
-    const ffmpeg = new FFmpeg();
-    ffmpeg.on('log', ({ message }) => {
-      console.log('[ffmpeg log]', message);
-    });
-    ffmpeg.on('progress', ({ progress }) => {
-      vconvProgress = Math.round(progress * 100);
-      // 把真实进度写进提示行，用户能看到百分比在动，而不是干等
-      const hint = $('vconvHint');
-      if (hint) hint.textContent = t('tool.converting') + ' ' + vconvProgress + '%';
-      console.log('[ffmpeg progress]', vconvProgress + '%');
-    });
-    await ffmpeg.load({
-      coreURL: coreBase + 'ffmpeg-core.js',
-      wasmURL: FFMPEG_CFG.wasmURL
-    }).catch(e => {
-      console.error('[ffmpeg load failed]', e);
-      throw e;
-    });
-    ffmpegInstance = ffmpeg;
-    return ffmpeg;
-  })();
+    video.onloadedmetadata = () => {
+      // captureStream 在部分浏览器叫 mozCaptureStream
+      const capture = video.captureStream || video.mozCaptureStream;
+      if (!capture) return fail(new Error('当前浏览器不支持 captureStream，请用 Chrome/Edge/Firefox'));
+      try {
+        stream = capture.call(video);
+      } catch (e) {
+        return fail(new Error('captureStream 失败：' + (e && e.message ? e.message : e)));
+      }
 
-  return ffmpegLoading;
-}
+      let rec;
+      try {
+        const opts = { mimeType };
+        if (videoBitsPerSecond) opts.videoBitsPerSecond = videoBitsPerSecond;
+        rec = new MediaRecorder(stream, opts);
+      } catch (e) {
+        return fail(new Error('该格式不被浏览器的录制器支持：' + mimeType));
+      }
+      recorder = rec;
+      rec.ondataavailable = (ev) => { if (ev.data && ev.data.size > 0) chunks.push(ev.data); };
+      rec.onerror = (ev) => fail(new Error('录制出错：' + (ev.error && ev.error.name ? ev.error.name : 'unknown')));
+      rec.onstop = () => {
+        const out = new Blob(chunks, { type: mimeType.split(';')[0] });
+        settled = true;
+        cleanup();
+        if (out.size === 0) return reject(new Error('录制结果为空，可能视频轨道无法捕获'));
+        resolve(out);
+      };
 
-// 为什么不能用「空闲心跳看门狗」：
-// GitHub Pages 无法下发 COOP/COEP 头，ffmpeg.wasm 只能跑单线程；单线程下
-// ffmpeg.exec() 会在 worker 里“同步”跑完整个编码，期间几乎不向主线程投递
-// log/progress 事件。于是一个正常但较慢的编码在浏览器里会静默几十秒——
-// 旧的「N 秒无活动就判定崩溃」必然误杀（这正是 app.js 报“引擎崩溃”的根因）。
-// 改用「绝对超时」：只有整段编码超过 ABSOLUTE_TIMEOUT_MS 仍未结束才报错；
-// 真正的 wasm 崩溃（Aborted / RuntimeError）由 exec() 自己 reject，不依赖看门狗。
-const ABSOLUTE_TIMEOUT_MS = 8 * 60_000; // 8 分钟，足够单线程转码较大视频
-function execWatched(ffmpeg, args, timeoutMs = ABSOLUTE_TIMEOUT_MS) {
-  let timer;
-  const watchdog = new Promise((_, reject) => {
-    timer = setTimeout(() => {
-      reject(new Error('转码超时（' + Math.round(timeoutMs / 60000) + ' 分钟未完成），可能文件过大或该格式在单线程下过慢'));
-    }, timeoutMs);
+      video.onended = () => {
+        if (onProgress) onProgress(1);
+        done();
+        try { if (rec.state !== 'inactive') rec.stop(); } catch (_) {}
+      };
+
+      rec.start(200); // 每 200ms 触发一次 dataavailable，便于收集
+      const p = video.play();
+      if (p && p.catch) p.catch(err => fail(new Error('无法自动播放以进行录制：' + (err && err.message ? err.message : err))));
+
+      // 实时进度：currentTime / duration
+      progTimer = setInterval(() => {
+        if (video.duration && isFinite(video.duration)) {
+          const ratio = Math.min(0.99, video.currentTime / video.duration);
+          if (onProgress) onProgress(ratio);
+        }
+      }, 250);
+    };
   });
-  return Promise.race([ffmpeg.exec(args), watchdog]).finally(() => clearTimeout(timer));
-}
-
-// 致命错误后销毁实例，下次转换重新加载全新引擎
-function resetFFmpeg() {
-  if (ffmpegInstance) {
-    try { ffmpegInstance.terminate(); } catch (_) {}
-  }
-  ffmpegInstance = null;
-  ffmpegLoading = null;
 }
 
 function formatBytes(n) {
@@ -1784,100 +1791,50 @@ async function handleVconvUpload(file) {
 
 async function convertVideo() {
   if (!vconvFile) return;
-  const format = $('vconvFormat').value;
-  const crf = $('vconvQuality').value; // 18 / 23 / 28
+  const format = $('vconvFormat').value;      // webm-vp9 / webm-vp8 / mp4 / webp
+  const quality = $('vconvQuality').value;    // 18 / 23 / 28（沿用原有档位语义：越小越好）
   const btn = $('vconvBtn');
   const hint = $('vconvHint');
 
   btn.disabled = true;
-  btn.textContent = t('tool.loadingEngine');
-  hint.textContent = t('tool.loadingEngine');
+  btn.textContent = t('tool.converting');
+  hint.textContent = t('tool.converting');
 
   try {
-    const ffmpeg = await loadFFmpeg();
-    btn.textContent = t('tool.converting');
-    hint.textContent = t('tool.converting');
-
-    const ext = (vconvFile.name.split('.').pop() || 'mp4').toLowerCase();
-    const inputName = 'input.' + ext;
-    const outputName = 'output.' + format;
-
-    // fetchFile 为自实现工具（见上），把 File 读成 Uint8Array 传给 ffmpeg.writeFile
-    await ffmpeg.writeFile(inputName, await fetchFile(vconvFile));
-
-    // 不同输出格式的命令：
-    //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
-    //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
-    //   webp - 抽帧导出单张 WebP（Canvas API 原生支持，无需 ffmpeg）
-    //   （不提供 webm：单线程 wasm 下 libvpx VP8/VP9 均触发 memory access out of bounds，
-    //     实测必崩，已从下拉框移除）
-    let args;
-    if (format === 'gif') {
-      // 两遍法：先生成调色板，再用调色板转 gif，能显著减少色阶断层/马赛克
-      const palette = 'palette.png';
-      const paletteFilter = 'fps=10,scale=480:-1:flags=lanczos,palettegen';
-      const useFilter = 'fps=10,scale=480:-1:flags=lanczos[x];[x][1:v]paletteuse';
-      await execWatched(ffmpeg, ['-i', inputName, '-vf', paletteFilter, palette]);
-      await execWatched(ffmpeg, ['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
-      try { await ffmpeg.deleteFile(palette); } catch (_) {}
-    } else if (format === 'webp') {
-      // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
-      const frameName = 'frame.jpg';
-      await execWatched(ffmpeg, ['-i', inputName, '-frames:v', '1', '-q:v', '5', frameName]);
-      const frameData = await ffmpeg.readFile(frameName);
-      try { await ffmpeg.deleteFile(frameName); } catch (_) {}
-      const img = await blobToImage(new Blob([frameData.buffer || frameData], { type: 'image/jpeg' }));
-      const c = document.createElement('canvas');
-      c.width = img.naturalWidth;
-      c.height = img.naturalHeight;
-      c.getContext('2d').drawImage(img, 0, 0);
-      // 下拉框的 value 是 CRF 语义（越小越好），需反向映射为 toBlob 的 quality（越大越好）
-      const crfToQuality = { '18': 0.92, '23': 0.8, '28': 0.6 };
-      const quality = crfToQuality[$('vconvQuality').value] || 0.8;
-      const blob = await new Promise((resolve, reject) => {
-        c.toBlob(b => b ? resolve(b) : reject(new Error('canvas webp export failed')), 'image/webp', quality);
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'frame.webp';
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 2000);
+    // WEBP：抽单帧 → canvas 导出，无需录制
+    if (format === 'webp') {
+      const blob = await extractFrameAsWebp(vconvFile, quality);
+      triggerDownload(blob, 'frame.webp');
       hint.textContent = '';
       toast(t('tool.done'));
       return;
-    } else {
-      // mp4 / h.264：-pix_fmt yuv420p 保证浏览器可播；-movflags +faststart 改善流播
-      args = ['-i', inputName, '-c:v', 'libx264', '-crf', crf, '-preset', 'medium',
-              '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '128k',
-              '-movflags', '+faststart', outputName];
-      await execWatched(ffmpeg, args);
     }
 
-    const data = await ffmpeg.readFile(outputName);
-    const mime = format === 'gif' ? 'image/gif' : 'video/mp4';
-    const blob = new Blob([data.buffer || data], { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'converted.' + format;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
+    // 其余走实时录制。先确认浏览器支持目标编解码器
+    const mime = pickRecorderMime(format);
+    if (!mime) {
+      hint.textContent = t('tool.formatUnsupported');
+      return;
+    }
 
-    // 清理虚拟文件系统，避免占用内存
-    try { await ffmpeg.deleteFile(inputName); } catch (_) {}
-    try { await ffmpeg.deleteFile(outputName); } catch (_) {}
+    // 质量档 → 目标视频码率（bps）。档位越小画质越高 → 码率越大
+    const qualityToBitrate = { '18': 8_000_000, '23': 4_000_000, '28': 1_500_000 };
+    const bitrate = qualityToBitrate[quality] || 4_000_000;
+
+    const blob = await recordVideoToFormat(vconvFile, mime, bitrate, (ratio) => {
+      const pct = Math.round(ratio * 100);
+      hint.textContent = t('tool.converting') + ' ' + pct + '%';
+    });
+
+    // 输出扩展名：webm-* → webm，mp4 → mp4
+    const outExt = format.startsWith('webm') ? 'webm' : 'mp4';
+    triggerDownload(blob, 'converted.' + outExt);
 
     hint.textContent = '';
     toast(t('tool.done'));
   } catch (e) {
     console.error('[video convert]', e);
     const msg = e && e.message ? e.message : String(e);
-    console.error('[video convert] full:', e);
-    // wasm 致命错误或转码超时后，实例已不可用（exec 卡死/内存被 Abort），销毁以便下次重建
-    if (e instanceof Error && (e.name === 'RuntimeError' || /超时|Aborted/i.test(msg))) {
-      resetFFmpeg();
-    }
     hint.textContent = t('tool.videoConvertFail') + ' (' + msg.slice(0, 80) + ')';
   } finally {
     btn.disabled = false;
@@ -1885,13 +1842,37 @@ async function convertVideo() {
   }
 }
 
-// canvas.toBlob 接受 Blob 作回调参数（现代浏览器），此处额外提供 blob→Image 工具
-function blobToImage(blob) {
+// WEBP：把视频第一帧画到 canvas，再用原生 toBlob 导出为 WebP（有损，质量可控）
+function extractFrameAsWebp(file, quality) {
   return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => { URL.revokeObjectURL(img.src); resolve(img); };
-    img.onerror = () => { URL.revokeObjectURL(img.src); reject(new Error('image decode failed')); };
-    img.src = URL.createObjectURL(blob);
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    const srcURL = URL.createObjectURL(file);
+    video.src = srcURL;
+    video.onerror = () => { URL.revokeObjectURL(srcURL); reject(new Error('无法解码该视频文件')); };
+    video.onloadeddata = () => {
+      // seek 到 0.1s 附近，避开纯黑首帧
+      const t0 = Math.min(0.1, (video.duration || 1) / 2);
+      video.currentTime = t0;
+    };
+    video.onseeked = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = video.videoWidth;
+        c.height = video.videoHeight;
+        c.getContext('2d').drawImage(video, 0, 0);
+        const crfToQuality = { '18': 0.92, '23': 0.8, '28': 0.6 };
+        const q = crfToQuality[quality] || 0.8;
+        c.toBlob(b => {
+          URL.revokeObjectURL(srcURL);
+          b ? resolve(b) : reject(new Error('canvas webp export failed'));
+        }, 'image/webp', q);
+      } catch (e) {
+        URL.revokeObjectURL(srcURL);
+        reject(e);
+      }
+    };
   });
 }
 

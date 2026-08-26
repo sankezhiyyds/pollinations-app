@@ -293,9 +293,10 @@
               <div class="grow">
                 <label class="lbl" data-i18n="tool.format">输出格式</label>
                 <select id="vconvFormat" class="select">
+                  <option value="webm-vp9">WebM · VP9</option>
+                  <option value="webm-vp8">WebM · VP8</option>
                   <option value="mp4">MP4 · H.264</option>
                   <option value="webp">WEBP（抽帧）</option>
-                  <option value="gif">GIF</option>
                 </select>
               </div>
               <div class="grow" id="vconvQualityRow">
@@ -308,7 +309,7 @@
                 <span id="vconvWebpTip" class="hint hidden" data-i18n="tool.webpExtractTip"></span>
               </div>
             </div>
-            <p class="warn" data-i18n="tool.videoWarn">视频转码在浏览器本地进行，不依赖服务器；首次使用需加载约 30MB 引擎，文件较大时较慢，请耐心等待</p>
+            <p class="warn" data-i18n="tool.videoWarn">视频转码在浏览器本地实时进行，不依赖服务器、无需下载引擎；转码耗时约等于视频时长，请保持页面在前台</p>
             <button id="vconvBtn" class="btn primary" data-i18n="tool.convert">转换并下载</button>
             <p id="vconvHint" class="hint"></p>
           </div>
