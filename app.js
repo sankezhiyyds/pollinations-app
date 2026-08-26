@@ -252,7 +252,8 @@ function updateBadge() {
 
 // 新版接口拿不到就退回预置列表，保证界面永远可用
 async function loadModels() {
-  fillSelect($('imgModel'), FALLBACK_IMAGE_MODELS, 'flux');
+  const defaultModel = state.apiKey ? 'gptimage' : 'flux';
+  fillSelect($('imgModel'), FALLBACK_IMAGE_MODELS, defaultModel);
   fillSelect($('txtModel'), FALLBACK_TEXT_MODELS, 'openai');
 
   try {
@@ -260,7 +261,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) fillSelect($('imgModel'), list, 'flux');
+      if (list.length) fillSelectWithBadges($('imgModel'), list, defaultModel);
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -309,6 +310,38 @@ function fillSelect(sel, list, preferred) {
     sel.appendChild(opt);
   });
   if (list.includes(preferred)) sel.value = preferred;
+}
+
+// 带模型标签的填充：为 premium 模型添加 🌟 前缀
+function fillSelectWithBadges(sel, list, preferred) {
+  sel.innerHTML = '';
+  list.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    const isPremium = PREMIUM_IMAGE_MODELS.includes(name);
+    opt.textContent = isPremium ? '🌟 ' + name : name;
+    sel.appendChild(opt);
+  });
+  // 优先选 premium 模型（有 key 时），否则选第一个
+  const actualPreferred = state.apiKey && list.includes(preferred) ? preferred : (state.apiKey ? list.find(m => PREMIUM_IMAGE_MODELS.includes(m)) : preferred);
+  if (actualPreferred && list.includes(actualPreferred)) sel.value = actualPreferred;
+}
+
+function updateModelHint() {
+  const model = $('imgModel').value;
+  const hint = $('modelHint');
+  if (!hint) return;
+  if (PREMIUM_IMAGE_MODELS.includes(model)) {
+    if (!state.apiKey) {
+      hint.textContent = t('img.modelNeedKey');
+      hint.style.color = 'var(--danger)';
+    } else {
+      hint.textContent = t('img.modelPremium');
+      hint.style.color = 'var(--ok)';
+    }
+  } else {
+    hint.textContent = '';
+  }
 }
 
 // ---------- 图片生成 ----------
@@ -989,6 +1022,7 @@ function bindEvents() {
   $('againBtn').addEventListener('click', () => generateImage(true));
   $('dlBtn').addEventListener('click', downloadImage);
   $('seedBtn').addEventListener('click', () => { $('imgSeed').value = randSeed(); });
+  $('imgModel').addEventListener('change', () => updateModelHint());
 
   // 音频
   $('audBtn').addEventListener('click', () => generateAudio(false));
