@@ -617,16 +617,12 @@ async function generateImage(reuseSeed) {
   assistant.say('ast.imgStart');
 
   const started = Date.now();
-  // 图生图模式：用 kontext 模型 + image 参数
-  const legacy = isEditMode
-    ? buildEditImageUrl(prompt, imgEditImageData, opts)
-    : buildLegacyImageUrl(prompt, opts);
 
   try {
-    // 图生图模式只走旧版端点（kontext + image 参数）
-    // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版端点
+    // 图生图：POST 到 image.pollinations.ai/prompt（避免 GET URI 超长）
+    // 文生图：有 key 走新版端点（1024+ 全分辨率），无 key 走旧版 GET 端点
     const got = isEditMode
-      ? await loadImage(legacy)
+      ? await loadImageFromPost(prompt, imgEditImageData, opts)
       : state.apiKey
         ? await loadImage(buildImageUrl(prompt, opts))
         : await loadImage(legacy);
@@ -812,6 +808,39 @@ function updateNeedKeyVisibility() {
   const visible = !state.apiKey;
   $('audioNeedKey').classList.toggle('hidden', !visible);
   $('videoNeedKey').classList.toggle('hidden', !visible);
+}
+
+// 图生图 POST 请求（避免 GET URI 超长）
+async function loadImageFromPost(prompt, imageUrl, opts) {
+  const body = {
+    model: 'kontext',
+    image: imageUrl,
+    width: opts.width,
+    height: opts.height,
+    seed: opts.seed,
+    nologo: opts.nologo,
+    ...(opts.negative ? { negative: opts.negative } : {})
+  };
+  const headers = { 'Content-Type': 'application/json' };
+  if (state.apiKey) headers['Authorization'] = 'Bearer ' + state.apiKey;
+
+  const url = API.legacyImage + '/prompt';
+  const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const data = await res.json();
+
+  // 新格式：{ image: 'base64...', width: N, height: N, ... }
+  if (data.image && typeof data.image === 'string') {
+    const mimeType = data.format === 'png' ? 'image/png' : 'image/jpeg';
+    const b64 = data.image.startsWith('data:') ? data.image : 'data:' + mimeType + ';base64,' + data.image;
+    const objUrl = URL.createObjectURL(await (await fetch(b64)).blob());
+    return loadImage(objUrl);
+  }
+
+  // 兼容旧格式：{ url: '...' }
+  const imgUrl = data.url || data.image_url;
+  if (!imgUrl) throw new Error('no image in response');
+  return loadImage(imgUrl);
 }
 
 // 单个 URL 加载，回传真实尺寸
