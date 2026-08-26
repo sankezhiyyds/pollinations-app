@@ -1695,6 +1695,7 @@ let ffmpegInstance = null;
 let ffmpegLoading = null;
 let ffmpegLastActivity = 0;
 let vconvFile = null;
+let vconvProgress = 0; // 最近一次 progress 事件的百分比，供提示行显示
 
 async function loadFFmpeg() {
   if (ffmpegInstance) return ffmpegInstance;
@@ -1709,7 +1710,9 @@ async function loadFFmpeg() {
     // 2) core 用绝对同源 URL（importScripts 的相对基准是 worker 目录，不能用相对路径）
     const coreBase = new URL(FFMPEG_CFG.coreBase, location.href).href;
 
-    // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截
+    // 3) 不传 classWorkerURL → 走经典 worker：ffmpeg.js 同源，new Worker 不被拦截。
+    //    （实测线上版本就是经典 worker 启动成功的，日志能打到 x264 编码器初始化，
+    //     不要改成 module worker——UMD 里 classWorkerURL 的基址解析有上游 bug）
     const ffmpeg = new FFmpeg();
     ffmpeg.on('log', ({ message }) => {
       ffmpegLastActivity = Date.now();
@@ -1717,7 +1720,11 @@ async function loadFFmpeg() {
     });
     ffmpeg.on('progress', ({ progress }) => {
       ffmpegLastActivity = Date.now();
-      console.log('[ffmpeg progress]', (progress * 100).toFixed(1) + '%');
+      vconvProgress = Math.round(progress * 100);
+      // 把真实进度写进提示行，用户能看到百分比在动，而不是干等
+      const hint = $('vconvHint');
+      if (hint) hint.textContent = t('tool.converting') + ' ' + vconvProgress + '%';
+      console.log('[ffmpeg progress]', vconvProgress + '%');
     });
     await ffmpeg.load({
       coreURL: coreBase + 'ffmpeg-core.js',
@@ -1733,11 +1740,12 @@ async function loadFFmpeg() {
   return ffmpegLoading;
 }
 
-// wasm 发生致命错误（如 memory access out of bounds）后 worker 不再回包，
-// exec() 的 promise 会永远 pending。用看门狗检测"心跳停止"并主动 reject。
-// VP9 -cpu-used 3 编第 1 帧可能慢（20~40s），但 ffmpeg log 每帧都会打 frame=N 行，
-// 所以 60 秒静默 = 引擎真死了。真死掉的引擎永远不会再产生任何 log。
-const WATCHDOG_IDLE_MS = 60_000;
+// watchdog 30s：
+// - ffmpeg 的进度行用 \r 原地刷新，不换行；vendor 的 ffmpeg-core.js 已打补丁
+//   （put_char 对 \r 也触发 flush），编码期间每条进度行都会变成 log 事件；
+// - 即使补丁失效，progress 事件也会持续到达。两条心跳链路任一活着就不会误报；
+// - 30s 内两条链路都静默，才判定引擎真挂了（wasm trap / worker 被杀）。
+const WATCHDOG_IDLE_MS = 30_000;
 function execWatched(ffmpeg, args, idleMs = WATCHDOG_IDLE_MS) {
   ffmpegLastActivity = Date.now();
   let timer;
@@ -1804,11 +1812,10 @@ async function convertVideo() {
 
     // 不同输出格式的命令：
     //   mp4  - libx264 + yuv420p，CRF 越小质量越高（18≈无损，23 默认，28 较小）
-    //   webm - libvpx(VP8) + libvorbis；注意不能用 libvpx-vp9，
-    //          单线程 ffmpeg.wasm 编 VP9 会触发 memory access out of bounds（已知问题 #679）
-    //          -cpu-used -1 强制最高质量（代价是慢）；crf max-intra-rate -1 禁止关键帧混用不同 CRF
     //   gif  - 调色板 + lanczos 缩放，避免直接转 gif 出现明显色阶断层
     //   webp - 抽帧导出单张 WebP（Canvas API 原生支持，无需 ffmpeg）
+    //   （不提供 webm：单线程 wasm 下 libvpx VP8/VP9 均触发 memory access out of bounds，
+    //     实测必崩，已从下拉框移除）
     let args;
     if (format === 'gif') {
       // 两遍法：先生成调色板，再用调色板转 gif，能显著减少色阶断层/马赛克
@@ -1818,14 +1825,6 @@ async function convertVideo() {
       await execWatched(ffmpeg, ['-i', inputName, '-vf', paletteFilter, palette]);
       await execWatched(ffmpeg, ['-i', inputName, '-i', palette, '-lavfi', useFilter, outputName]);
       try { await ffmpeg.deleteFile(palette); } catch (_) {}
-    } else if (format === 'webm') {
-      // libvpx-vp9 在单线程 wasm 下偶发 memory access out of bounds（issue #679），
-      // 用 -cpu-used 3 平衡速度与质量：默认 6 质量太差，-1 太慢。
-      // error-resilient=1 防止帧错误扩散。crf max-intra-rate -1 禁止关键帧混用不同 CRF
-      args = ['-i', inputName, '-c:v', 'libvpx-vp9', '-cpu-used', '3', '-crf', crf, '-b:v', '0',
-              '-crf max-intra-rate', '-1', '-error-resilient', '1',
-              '-c:a', 'libvorbis', '-qscale:a', '6', '-pix_fmt', 'yuv420p', outputName];
-      await execWatched(ffmpeg, args);
     } else if (format === 'webp') {
       // WebP：用 ffmpeg 抽一帧，走 Canvas API 原生 export 为 WebP（无损/有损可控）
       const frameName = 'frame.jpg';
@@ -1861,7 +1860,7 @@ async function convertVideo() {
     }
 
     const data = await ffmpeg.readFile(outputName);
-    const mime = format === 'webm' ? 'video/webm' : format === 'gif' ? 'image/gif' : 'video/mp4';
+    const mime = format === 'gif' ? 'image/gif' : 'video/mp4';
     const blob = new Blob([data.buffer || data], { type: mime });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
