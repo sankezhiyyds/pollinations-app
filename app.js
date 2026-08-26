@@ -290,6 +290,32 @@ function fmtTokens(n) {
   return String(n);
 }
 
+// 生成成功后重新拉取余额：刷新徽章并返回本次消耗的积分（无 Key / 无权限 / 未变 / 增加时返回 null）
+async function refreshBalance() {
+  if (!state.apiKey) return null;
+  try {
+    const res = await fetch(API.base + '/account/balance', { headers: authHeaders() });
+    if (!res.ok) return null;
+    const data = await res.json();
+    const raw = data && (data.balance != null ? data.balance
+      : (data.data && data.data.balance != null ? data.data.balance : null));
+    if (raw == null) return null;
+    const prev = state.balance;
+    state.balance = Number(raw);
+    updateBadge();
+    return prev != null && state.balance < prev ? prev - state.balance : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// 每次生成成功后调用：刷新余额，若确有消耗则 toast 提示
+function reportSpend() {
+  refreshBalance().then(delta => {
+    if (delta != null && delta > 0) toast(t('ast.creditSpent', { c: delta.toFixed(2) }));
+  });
+}
+
 // ---------- 模型列表 ----------
 
 // 新版接口拿不到就退回预置列表，保证界面永远可用
@@ -714,6 +740,7 @@ async function generateImage(reuseSeed) {
     pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: histUrl, at: Date.now() });
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
+    reportSpend();
     // 成功路径必须自己复位按钮：失败路径走倒计时，不能放在 finally 里统一处理
     state.generating = false;
     assistant.think(false);
@@ -811,6 +838,7 @@ async function generateAudio(reuse) {
     assistant.say(reuse ? 'ast.audioDone' : 'ast.audioDone', { s: secs });
     state.lastAudio = { url: local, prompt: text, model, voice, format, instructions };
     pushHistory({ type: 'audio', prompt: text, model, seed: null, size: format, url: local, at: Date.now() });
+    reportSpend();
   } catch (e) {
     const msg = e.message === 'no-key' ? t('need.key') : (state.apiKey ? t('aud.fail') : t('aud.rate'));
     $('audStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
@@ -886,6 +914,7 @@ async function generateVideo(reuse) {
     assistant.say(reuse ? 'ast.videoDone' : 'ast.videoDone', { s: secs });
     state.lastVideo = { url: local, prompt, model, resolution, duration, aspectRatio, audio };
     pushHistory({ type: 'video', prompt, model, seed, size: resolution, url: local, at: Date.now() });
+    reportSpend();
   } catch (e) {
     const msg = state.apiKey ? t('vid.fail') : t('vid.rate');
     $('vidStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
@@ -1107,24 +1136,32 @@ async function sendMessage() {
     ? [API.base + '/v1/chat/completions', API.legacyText + '/openai']
     : [API.legacyText + '/openai', API.base + '/v1/chat/completions'];
 
-  let result = false;
+  let result = { status: false, usage: 0 };
+  let responseUsage = 0;
   for (const endpoint of chain) {
     result = await streamChat(endpoint, payload, idx);
-    if (result === true || signal.aborted) break;
+    responseUsage += result.usage;
+    if (result.status === true || signal.aborted) break;
   }
 
   if (!state.messages[idx].content) {
     if (signal.aborted) {
       state.messages.splice(idx, 1);
     } else {
-      state.messages[idx].content = result === 'ratelimit' ? t('txt.rate') : (result === 'unauth' ? t('txt.unauth') : t('txt.fail'));
-      assistant.say(result === 'ratelimit' ? 'ast.rate' : (result === 'unauth' ? 'ast.imgFail' : 'ast.imgFail'));
+      state.messages[idx].content = result.status === 'ratelimit' ? t('txt.rate') : (result.status === 'unauth' ? t('txt.unauth') : t('txt.fail'));
+      assistant.say(result.status === 'ratelimit' ? 'ast.rate' : 'ast.imgFail');
     }
   } else {
     assistant.say('ast.textDone');
-    if (state.tokensUsed > 0) {
-      const credits = (state.tokensUsed / state.creditRate).toFixed(2);
-      toast(t('ast.tokenCount', { n: fmtTokens(state.tokensUsed), c: credits }));
+    if (responseUsage > 0) {
+      state.tokensUsed += responseUsage;
+      updateBadge();
+      toast(t('ast.tokenCount', {
+        n: fmtTokens(responseUsage),
+        c: (responseUsage / state.creditRate).toFixed(2),
+        t: fmtTokens(state.tokensUsed),
+        d: (state.tokensUsed / state.creditRate).toFixed(2)
+      }));
     }
     pushHistory({
       type: 'text',
@@ -1144,8 +1181,10 @@ async function sendMessage() {
 }
 
 // SSE 流式读取，逐字上屏
-// 返回 true=成功；'ratelimit'=被限流；false=其他失败(可回退)
+// 返回 { status, usage }：status 为 true=成功 / 'ratelimit'=被限流 / 'unauth'=无权限 / false=其他失败(可回退)
+// usage 为本次请求的 token 数（服务端若分片重复推送 usage，取最大值避免重复累计）
 async function streamChat(endpoint, payload, idx) {
+  let usageTokens = 0;
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -1163,13 +1202,13 @@ async function streamChat(endpoint, payload, idx) {
           const body = await res.json();
           const msg = body && (body.message || (body.error && body.error.message) || '');
           if (msg && (msg.includes('session') || msg.includes('token') || msg.includes('permission'))) {
-            return 'unauth';
+            return { status: 'unauth', usage: usageTokens };
           }
         }
       } catch (e) { /* ignore */ }
-      return 'ratelimit';
+      return { status: 'ratelimit', usage: usageTokens };
     }
-    if (!res.ok || !res.body) return false;
+    if (!res.ok || !res.body) return { status: false, usage: usageTokens };
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
@@ -1201,17 +1240,17 @@ async function streamChat(endpoint, payload, idx) {
             renderChat();
           }
           const usage = json.usage;
-          if (usage && usage.total_tokens) state.tokensUsed += usage.total_tokens;
+          if (usage && usage.total_tokens) usageTokens = Math.max(usageTokens, usage.total_tokens);
         } catch (e) { /* 跳过不完整分片 */ }
       }
     }
-    return state.messages[idx].content ? true : false;
+    return { status: state.messages[idx].content ? true : false, usage: usageTokens };
   } catch (e) {
     if (e.name === 'AbortError') {
       toast(t('txt.stopped'));
-      return true;
+      return { status: true, usage: usageTokens };
     }
-    return false;
+    return { status: false, usage: usageTokens };
   }
 }
 
