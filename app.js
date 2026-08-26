@@ -835,7 +835,7 @@ async function generateAudio(reuse) {
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     $('audMeta').textContent = model + ' · ' + format + ' · ' + secs + 's';
     $('audHint').textContent = t('aud.done');
-    assistant.say(reuse ? 'ast.audioDone' : 'ast.audioDone', { s: secs });
+    assistant.say('ast.audioDone', { s: secs });
     state.lastAudio = { url: local, prompt: text, model, voice, format, instructions };
     pushHistory({ type: 'audio', prompt: text, model, seed: null, size: format, url: local, at: Date.now() });
     reportSpend();
@@ -911,7 +911,7 @@ async function generateVideo(reuse) {
     const secs = ((Date.now() - started) / 1000).toFixed(1);
     $('vidMeta').textContent = model + ' · ' + resolution + ' · ' + duration + 's · ' + secs + 's';
     $('vidHint').textContent = t('vid.done');
-    assistant.say(reuse ? 'ast.videoDone' : 'ast.videoDone', { s: secs });
+    assistant.say('ast.videoDone', { s: secs });
     state.lastVideo = { url: local, prompt, model, resolution, duration, aspectRatio, audio };
     pushHistory({ type: 'video', prompt, model, seed, size: resolution, url: local, at: Date.now() });
     reportSpend();
