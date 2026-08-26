@@ -353,6 +353,7 @@ function updateImageModelSelect(apiList) {
 }
 
 function fillRatioSelect(sel, ratios, preferred) {
+  const current = sel.value;
   sel.innerHTML = '';
   const ratioLabels = {
     '512x512': '1:1 · 512×512',
@@ -374,7 +375,8 @@ function fillRatioSelect(sel, ratios, preferred) {
     opt.textContent = ratioLabels[r] || r;
     sel.appendChild(opt);
   });
-  if (ratios.includes(preferred)) sel.value = preferred;
+  if (ratios.includes(current)) sel.value = current;
+  else if (ratios.includes(preferred)) sel.value = preferred;
 }
 
 // 兼容三种返回形态：字符串数组 / 对象数组 / OpenAI 风格 {data:[...]}
@@ -386,6 +388,7 @@ function normalizeModels(data) {
 }
 
 function fillSelect(sel, list, preferred) {
+  const current = sel.value;
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
@@ -393,11 +396,13 @@ function fillSelect(sel, list, preferred) {
     opt.textContent = name;
     sel.appendChild(opt);
   });
-  if (list.includes(preferred)) sel.value = preferred;
+  if (list.includes(current)) sel.value = current;
+  else if (list.includes(preferred)) sel.value = preferred;
 }
 
 // 带模型标签的填充：为 premium 模型添加 🌟 前缀，未登录时禁用付费模型
 function fillSelectWithBadges(sel, list, preferred) {
+  const current = sel.value;
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
@@ -410,7 +415,8 @@ function fillSelectWithBadges(sel, list, preferred) {
     }
     sel.appendChild(opt);
   });
-  if (list.includes(preferred)) sel.value = preferred;
+  if (list.includes(current) && !(PREMIUM_IMAGE_MODELS.includes(current) && !state.apiKey)) sel.value = current;
+  else if (list.includes(preferred)) sel.value = preferred;
 }
 
 function updateModelHint() {
@@ -653,8 +659,10 @@ async function generateImage(reuseSeed) {
     $('imgMeta').textContent = model + ' · ' + realW + '×' + realH + ' · seed ' + seed + ' · ' + secs + 's';
     $('imgHint').textContent = t('img.done');
 
-    state.lastImage = { url, apiUrl, prompt, model, width: realW, height: realH, seed };
-    pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: apiUrl, at: Date.now() });
+    state.lastImage = { url, apiUrl: apiUrl || url, prompt, model, width: realW, height: realH, seed };
+    // 图生图 apiUrl 为 null（无法复现 GET URL），历史记录用当前显示 url（blob 在同一会话可见，刷新后失效）
+    const histUrl = apiUrl || url;
+    pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: histUrl, at: Date.now() });
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
   } catch (e) {
@@ -1123,10 +1131,10 @@ function renderHistory() {
     }).format(new Date(h.at));
 
     const thumb = h.type === 'image'
-      ? '<img class="hist-thumb" src="' + (h.url || '') + '" alt="" loading="lazy">'
+      ? '<img class="hist-thumb" src="' + (h.url || '') + '" alt="" loading="lazy" onerror="this.replaceWith(Object.assign(document.createElement(\'div\'),{className:\'hist-thumb\',textContent:\'🖼\'}))">'
       : h.type === 'audio'
         ? '<div class="hist-thumb aud">♪</div>'
-        : h.type === 'video'
+      : h.type === 'video'
           ? '<div class="hist-thumb vid">▶</div>'
           : '<div class="hist-thumb txt">T</div>';
 
