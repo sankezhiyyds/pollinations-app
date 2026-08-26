@@ -644,16 +644,27 @@ async function generateImage(reuseSeed) {
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
   } catch (e) {
-    // 图片走 <img> 加载，拿不到状态码；匿名失败绝大多数是限流(约15秒1次)
+    // 图片走 <img> 加载，拿不到状态码；任何用户都可能被限流
     const msg = state.apiKey ? t('img.fail') : t('img.rate');
     $('imgStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
     $('imgHint').textContent = msg;
     assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
-  } finally {
+    // 无论是否有 key，都禁用按钮并倒计时
+    let remaining = state.apiKey ? 10 : 15;
     state.generating = false;
     assistant.think(false);
-    $('imgBtn').disabled = false;
-    $('imgBtn').textContent = t('img.generate');
+    $('imgBtn').disabled = true;
+    $('imgBtn').textContent = t('img.retryWait', { n: remaining });
+    const interval = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        $('imgBtn').disabled = false;
+        $('imgBtn').textContent = t('img.generate');
+      } else {
+        $('imgBtn').textContent = t('img.retryWait', { n: remaining });
+      }
+    }, 1000);
   }
 }
 
