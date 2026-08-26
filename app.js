@@ -1693,7 +1693,6 @@ async function fetchFile(input) {
 
 let ffmpegInstance = null;
 let ffmpegLoading = null;
-let ffmpegLastActivity = 0;
 let vconvFile = null;
 let vconvProgress = 0; // 最近一次 progress 事件的百分比，供提示行显示
 
@@ -1715,11 +1714,9 @@ async function loadFFmpeg() {
     //     不要改成 module worker——UMD 里 classWorkerURL 的基址解析有上游 bug）
     const ffmpeg = new FFmpeg();
     ffmpeg.on('log', ({ message }) => {
-      ffmpegLastActivity = Date.now();
       console.log('[ffmpeg log]', message);
     });
     ffmpeg.on('progress', ({ progress }) => {
-      ffmpegLastActivity = Date.now();
       vconvProgress = Math.round(progress * 100);
       // 把真实进度写进提示行，用户能看到百分比在动，而不是干等
       const hint = $('vconvHint');
@@ -1740,24 +1737,22 @@ async function loadFFmpeg() {
   return ffmpegLoading;
 }
 
-// watchdog 30s：
-// - ffmpeg 的进度行用 \r 原地刷新，不换行；vendor 的 ffmpeg-core.js 已打补丁
-//   （put_char 对 \r 也触发 flush），编码期间每条进度行都会变成 log 事件；
-// - 即使补丁失效，progress 事件也会持续到达。两条心跳链路任一活着就不会误报；
-// - 30s 内两条链路都静默，才判定引擎真挂了（wasm trap / worker 被杀）。
-const WATCHDOG_IDLE_MS = 30_000;
-function execWatched(ffmpeg, args, idleMs = WATCHDOG_IDLE_MS) {
-  ffmpegLastActivity = Date.now();
+// 为什么不能用「空闲心跳看门狗」：
+// GitHub Pages 无法下发 COOP/COEP 头，ffmpeg.wasm 只能跑单线程；单线程下
+// ffmpeg.exec() 会在 worker 里“同步”跑完整个编码，期间几乎不向主线程投递
+// log/progress 事件。于是一个正常但较慢的编码在浏览器里会静默几十秒——
+// 旧的「N 秒无活动就判定崩溃」必然误杀（这正是 app.js 报“引擎崩溃”的根因）。
+// 改用「绝对超时」：只有整段编码超过 ABSOLUTE_TIMEOUT_MS 仍未结束才报错；
+// 真正的 wasm 崩溃（Aborted / RuntimeError）由 exec() 自己 reject，不依赖看门狗。
+const ABSOLUTE_TIMEOUT_MS = 8 * 60_000; // 8 分钟，足够单线程转码较大视频
+function execWatched(ffmpeg, args, timeoutMs = ABSOLUTE_TIMEOUT_MS) {
   let timer;
   const watchdog = new Promise((_, reject) => {
-    timer = setInterval(() => {
-      if (Date.now() - ffmpegLastActivity > idleMs) {
-        clearInterval(timer);
-        reject(new Error('ffmpeg worker 无响应（引擎可能已崩溃），请重试'));
-      }
-    }, 2000);
+    timer = setTimeout(() => {
+      reject(new Error('转码超时（' + Math.round(timeoutMs / 60000) + ' 分钟未完成），可能文件过大或该格式在单线程下过慢'));
+    }, timeoutMs);
   });
-  return Promise.race([ffmpeg.exec(args), watchdog]).finally(() => clearInterval(timer));
+  return Promise.race([ffmpeg.exec(args), watchdog]).finally(() => clearTimeout(timer));
 }
 
 // 致命错误后销毁实例，下次转换重新加载全新引擎
@@ -1879,8 +1874,8 @@ async function convertVideo() {
     console.error('[video convert]', e);
     const msg = e && e.message ? e.message : String(e);
     console.error('[video convert] full:', e);
-    // wasm 致命错误（RuntimeError / worker 无响应）后引擎已不可用，销毁以便下次重建
-    if (e instanceof Error && (e.name === 'RuntimeError' || /无响应|Aborted/i.test(msg))) {
+    // wasm 致命错误或转码超时后，实例已不可用（exec 卡死/内存被 Abort），销毁以便下次重建
+    if (e instanceof Error && (e.name === 'RuntimeError' || /超时|Aborted/i.test(msg))) {
       resetFFmpeg();
     }
     hint.textContent = t('tool.videoConvertFail') + ' (' + msg.slice(0, 80) + ')';
