@@ -275,7 +275,8 @@ function updateBadge() {
       parts.push(state.balance.toFixed(2) + ' ' + t('tier.credits'));
     }
     if (state.tokensUsed > 0) {
-      parts.push('· ' + fmtTokens(state.tokensUsed));
+      const credits = (state.tokensUsed / state.creditRate).toFixed(2);
+      parts.push(fmtTokens(state.tokensUsed) + ' tokens · ' + credits + ' ' + t('tier.credits'));
     }
     badge.textContent = parts.join(' ');
     badge.className = 'badge green';
@@ -500,6 +501,24 @@ function updateVideoModelSelect(apiList) {
     resHint.style.color = '';
     modelHint.textContent = '';
   }
+}
+
+function fillVideoResolutionSelect(sel, list, preferred) {
+  const current = sel.value;
+  sel.innerHTML = '';
+  list.forEach(name => {
+    const opt = document.createElement('option');
+    const isPremium = PREMIUM_VIDEO_RESOLUTIONS.includes(name);
+    opt.value = name;
+    opt.textContent = isPremium ? '🌟 ' + name : name;
+    if (!state.apiKey && isPremium) {
+      opt.disabled = true;
+      opt.textContent += ' 🔒';
+    }
+    sel.appendChild(opt);
+  });
+  if (list.includes(current) && !(PREMIUM_VIDEO_RESOLUTIONS.includes(current) && !state.apiKey)) sel.value = current;
+  else if (list.includes(preferred)) sel.value = preferred;
 }
 
 function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix) {
@@ -1467,11 +1486,6 @@ function bindEvents() {
     $('vconvDrop').classList.remove('dragover');
     if (e.dataTransfer.files[0]) handleVconvUpload(e.dataTransfer.files[0]);
   });
-  // 质量档对所有格式都有意义：视频→码率，WEBP→toBlob quality。始终显示。
-  // 仅 WEBP 显示"抽帧导出单张图"说明。
-  $('vconvFormat').addEventListener('change', e => {
-    $('vconvWebpTip').classList.toggle('hidden', e.target.value !== 'webp');
-  });
   $('vconvBtn').addEventListener('click', convertVideo);
 
   // 语言切换后重绘动态内容
@@ -1650,7 +1664,7 @@ function convertImage() {
 //   边播放边实时录制转码。它不会「静默卡死」，webm 也不再崩溃。
 //   代价：转码耗时≈视频时长（实时录制），但结果稳定、可预期、绝不会假崩溃。
 //
-// 支持格式：WebM (VP9 / VP8)、MP4 (H.264，视浏览器支持)、WEBP（抽帧导出单张图）
+// 支持格式：WebM (VP9 / VP8)、MP4 (H.264，视浏览器支持)、动态 WEBP、GIF
 
 // 按目标格式挑选浏览器实际支持的 MediaRecorder mimeType（逐个探测，取第一个支持的）
 function pickRecorderMime(format) {
@@ -1877,8 +1891,10 @@ async function convertVideo() {
 
   try {
     if (format === 'webp') {
-      const blob = await extractFrameAsWebp(vconvFile, quality);
-      triggerDownload(blob, 'frame.webp');
+      const blob = await encodeVideoAsAnimatedWebp(vconvFile, quality, ratio => {
+        hint.textContent = t('tool.converting') + ' ' + Math.round(ratio * 100) + '%';
+      });
+      triggerDownload(blob, 'converted.webp');
       hint.textContent = '';
       toast(t('tool.done'));
       return;
@@ -1925,37 +1941,141 @@ async function convertVideo() {
   }
 }
 
-// WEBP：把视频第一帧画到 canvas，再用原生 toBlob 导出为 WebP（有损，质量可控）
-function extractFrameAsWebp(file, quality) {
+function uint24LE(value) {
+  return new Uint8Array([value & 255, (value >> 8) & 255, (value >> 16) & 255]);
+}
+
+function uint32LE(value) {
+  return new Uint8Array([value & 255, (value >> 8) & 255, (value >> 16) & 255, (value >> 24) & 255]);
+}
+
+function parseWebpChunks(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunks = [];
+  let offset = 12;
+  while (offset + 8 <= bytes.length) {
+    const type = String.fromCharCode(...bytes.slice(offset, offset + 4));
+    const size = (bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | (bytes[offset + 7] << 24)) >>> 0;
+    if (offset + 8 + size > bytes.length) break;
+    chunks.push({ type, data: bytes.slice(offset + 8, offset + 8 + size) });
+    offset += 8 + size + (size % 2);
+  }
+  return chunks;
+}
+
+async function assembleAnimatedWebp(frames, width, height) {
+  const encoder = new TextEncoder();
+  const parts = [];
+  const vp8x = new Uint8Array(10);
+  vp8x[0] = 0x02;
+  vp8x.set(uint24LE(width - 1), 4);
+  vp8x.set(uint24LE(height - 1), 7);
+  parts.push(encoder.encode('VP8X'), uint32LE(vp8x.length), vp8x);
+  const anim = new Uint8Array(6);
+  parts.push(encoder.encode('ANIM'), uint32LE(anim.length), anim);
+  for (const frame of frames) {
+    const chunks = parseWebpChunks(await frame.arrayBuffer()).filter(chunk => ['VP8 ', 'VP8L', 'ALPH'].includes(chunk.type));
+    if (!chunks.length) throw new Error('浏览器未能编码 WebP 帧');
+    const payloadSize = chunks.reduce((size, chunk) => size + 8 + chunk.data.length + chunk.data.length % 2, 16);
+    const header = new Uint8Array(16);
+    header.set(uint24LE(width - 1), 6);
+    header.set(uint24LE(height - 1), 9);
+    header.set(uint24LE(frame.duration), 12);
+    header[15] = 0x02;
+    parts.push(encoder.encode('ANMF'), uint32LE(payloadSize), header);
+    for (const chunk of chunks) {
+      parts.push(encoder.encode(chunk.type), uint32LE(chunk.data.length), chunk.data);
+      if (chunk.data.length % 2) parts.push(new Uint8Array([0]));
+    }
+  }
+  const contentSize = parts.reduce((size, part) => size + part.length, 4);
+  const riff = new Uint8Array(12);
+  riff.set(encoder.encode('RIFF'), 0);
+  riff.set(uint32LE(contentSize), 4);
+  riff.set(encoder.encode('WEBP'), 8);
+  return new Blob([riff, ...parts], { type: 'image/webp' });
+}
+
+function canvasToWebpBlob(canvas, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob || blob.type !== 'image/webp') {
+        reject(new Error('当前浏览器不支持 WebP 编码，请使用 Chrome/Edge/Firefox'));
+        return;
+      }
+      resolve(blob);
+    }, 'image/webp', quality);
+  });
+}
+
+function seekVideo(video, time) {
+  return new Promise((resolve, reject) => {
+    const done = () => {
+      video.removeEventListener('seeked', done);
+      video.removeEventListener('error', failed);
+      resolve();
+    };
+    const failed = () => {
+      video.removeEventListener('seeked', done);
+      video.removeEventListener('error', failed);
+      reject(new Error('读取视频帧失败'));
+    };
+    video.addEventListener('seeked', done, { once: true });
+    video.addEventListener('error', failed, { once: true });
+    video.currentTime = time;
+  });
+}
+
+function encodeVideoAsAnimatedWebp(file, quality, onProgress) {
   return new Promise((resolve, reject) => {
     const video = document.createElement('video');
     video.muted = true;
     video.playsInline = true;
+    video.preload = 'auto';
+    const canvas = document.createElement('canvas');
     const srcURL = URL.createObjectURL(file);
-    video.src = srcURL;
-    video.onerror = () => { URL.revokeObjectURL(srcURL); reject(new Error('无法解码该视频文件')); };
-    video.onloadeddata = () => {
-      // seek 到 0.1s 附近，避开纯黑首帧
-      const t0 = Math.min(0.1, (video.duration || 1) / 2);
-      video.currentTime = t0;
+    const cleanup = () => {
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(srcURL);
     };
-    video.onseeked = () => {
+    video.onerror = () => {
+      cleanup();
+      reject(new Error('无法解码该视频文件'));
+    };
+    video.onloadeddata = async () => {
       try {
-        const c = document.createElement('canvas');
-        c.width = video.videoWidth;
-        c.height = video.videoHeight;
-        c.getContext('2d').drawImage(video, 0, 0);
-        const crfToQuality = { '18': 0.92, '23': 0.8, '28': 0.6 };
-        const q = crfToQuality[quality] || 0.8;
-        c.toBlob(b => {
-          URL.revokeObjectURL(srcURL);
-          b ? resolve(b) : reject(new Error('canvas webp export failed'));
-        }, 'image/webp', q);
-      } catch (e) {
-        URL.revokeObjectURL(srcURL);
-        reject(e);
+        const scale = Math.min(1, 480 / Math.max(1, video.videoWidth));
+        canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+        canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
+        const context = canvas.getContext('2d');
+        const duration = Math.min(video.duration || 0, 60);
+        if (!duration) throw new Error('视频时长无效');
+        const frameDelay = 125;
+        const frameStep = frameDelay / 1000;
+        const frameCount = Math.max(1, Math.ceil(duration / frameStep));
+        const webpQuality = { '18': 0.92, '23': 0.8, '28': 0.6 }[quality] || 0.8;
+        const frames = [];
+        for (let index = 0; index < frameCount; index += 1) {
+          const time = Math.min(duration, index * frameStep);
+          if (index > 0) await seekVideo(video, time);
+          context.drawImage(video, 0, 0, canvas.width, canvas.height);
+          const frame = await canvasToWebpBlob(canvas, webpQuality);
+          frame.duration = frameDelay;
+          frames.push(frame);
+          if (onProgress) onProgress((index + 1) / frameCount * 0.8);
+        }
+        const blob = await assembleAnimatedWebp(frames, canvas.width, canvas.height);
+        if (onProgress) onProgress(1);
+        cleanup();
+        resolve(blob);
+      } catch (error) {
+        cleanup();
+        reject(error);
       }
     };
+    video.src = srcURL;
   });
 }
 
