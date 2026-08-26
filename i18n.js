@@ -126,6 +126,7 @@ const LOCALES = {
     'img.editNeedKey': '图生图需要 API Key。官方已把 kontext 模型限制为仅登录用户可用，匿名调用不会报错、而是被静默换成普通文生图结果。请先在登录框填入 Key',
     'img.noBalance': 'Key 额度不足，图生图属于付费模型，请检查账户余额',
     'img.sizeDowngrade': '实际生成 {w}×{h}，你选的是 {rw}×{rh}。匿名模式被服务端限制在约 768×768 的总像素内并按比例缩放，填入 API Key 才能拿到所选分辨率',
+    'img.timeout': '等待超时（90 秒无响应），服务端可能繁忙或网络不通，请稍后重试',
 
     'txt.model': '模型',
     'txt.temp': '温度',
@@ -303,6 +304,7 @@ const LOCALES = {
     'img.editNeedKey': 'Image-to-image needs an API key. Pollinations restricts the kontext model to signed-in users; anonymous calls do not error out, they silently fall back to a plain text-to-image result. Please add your key in the login box first',
     'img.noBalance': 'Key has no balance left. Image-to-image is a paid model, please check your account',
     'img.sizeDowngrade': 'Actually generated {w}×{h}, you picked {rw}×{rh}. Anonymous requests are capped at roughly 768×768 total pixels and scaled to fit; add an API key to get the size you selected',
+    'img.timeout': 'Timed out after 90s with no response. The server may be busy or unreachable — please try again later',
 
     'txt.model': 'Model',
     'txt.temp': 'Temperature',
@@ -485,6 +487,7 @@ const LOCALES = {
     'img.editNeedKey': '画像から画像生成には API キーが必要です。kontext モデルはログインユーザー限定のため、匿名リクエストはエラーにならず通常のテキスト生成画像に差し替えられます。まずログイン欄にキーを入力してください',
     'img.noBalance': 'キーの残高が不足しています。画像から画像生成は有料モデルです。アカウントをご確認ください',
     'img.sizeDowngrade': '実際は {w}×{h} で生成されました（選択は {rw}×{rh}）。匿名リクエストは約 768×768 相当の総ピクセル数に制限され比率を保って縮小されます。API キーを入力すると選択した解像度が使えます',
+    'img.timeout': '90 秒応答がなくタイムアウトしました。サーバーが混雑しているか通信できない可能性があります。しばらくしてから再試行してください',
 
     'txt.model': 'モデル',
     'txt.temp': '温度',

@@ -529,7 +529,9 @@ function buildImageUrl(prompt, opts) {
   p.set('width', opts.width);
   p.set('height', opts.height);
   p.set('seed', opts.seed);
-  if (opts.negative) p.set('negative', opts.negative);
+  // 服务端只认 negative_prompt，写成 negative 会被忽略成 "undefined"（EXIF 可验证）
+  if (opts.negative) p.set('negative_prompt', opts.negative);
+  p.set('quality', 'high');
   if (opts.nologo) p.set('nologo', 'true');
   if (opts.enhance) p.set('enhance', 'true');
   if (opts.priv) p.set('private', 'true');
@@ -544,7 +546,8 @@ function buildLegacyImageUrl(prompt, opts) {
   p.set('width', opts.width);
   p.set('height', opts.height);
   p.set('seed', opts.seed);
-  if (opts.negative) p.set('negative', opts.negative);
+  if (opts.negative) p.set('negative_prompt', opts.negative);
+  p.set('quality', 'high');
   if (opts.nologo) p.set('nologo', 'true');
   if (opts.enhance) p.set('enhance', 'true');
   if (opts.priv) p.set('private', 'true');
@@ -692,10 +695,17 @@ async function generateImage(reuseSeed) {
     pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: histUrl, at: Date.now() });
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
+    // 成功路径必须自己复位按钮：失败路径走倒计时，不能放在 finally 里统一处理
+    state.generating = false;
+    assistant.think(false);
+    $('imgBtn').disabled = false;
+    $('imgBtn').textContent = t('img.generate');
   } catch (e) {
     // 图生图走 fetch，能拿到真实错误信息；文生图走 <img>，拿不到状态码
     let msg;
-    if (isEditMode) {
+    if (e && e.timeout) {
+      msg = t('img.timeout');
+    } else if (isEditMode) {
       msg = e && e.status === 401 ? t('img.editNeedKey')
           : e && e.status === 402 ? t('img.noBalance')
           : (e && e.message) ? t('img.fail') + '（' + e.message + '）'
@@ -942,11 +952,32 @@ async function loadImageFromEdit(prompt, imageDataUrl, opts) {
 }
 
 // 单个 URL 加载，回传真实尺寸
-function loadImage(url) {
+// 必须带超时：服务端偶发挂住时 <img> 既不 onload 也不 onerror，
+// promise 永不 settle，会导致按钮永久卡在「生成中」
+function loadImage(url, timeoutMs = 90000) {
   return new Promise((resolve, reject) => {
     const img = new Image();
-    img.onload = () => resolve({ url, w: img.naturalWidth, h: img.naturalHeight });
-    img.onerror = () => reject(new Error('image load failed'));
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      img.src = '';
+      const err = new Error('image load timeout');
+      err.timeout = true;
+      reject(err);
+    }, timeoutMs);
+    img.onload = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ url, w: img.naturalWidth, h: img.naturalHeight });
+    };
+    img.onerror = () => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      reject(new Error('image load failed'));
+    };
     img.src = url;
   });
 }
