@@ -239,6 +239,14 @@ function openLoginModal() {
 
 function closeLoginModal() {
   $('loginModal').classList.add('hidden');
+  // X 掉弹窗且尚未进入应用时，等同于匿名进入
+  if (!state.apiKey && !state.anonymous && !localStorage.getItem(STORE.anon)) {
+    state.apiKey = '';
+    state.anonymous = true;
+    localStorage.setItem(STORE.anon, '1');
+    enterApp();
+    toast(t('login.anonNote'));
+  }
 }
 
 function enterApp() {
@@ -859,6 +867,7 @@ function updateNeedKeyVisibility() {
 async function loadImageFromPost(prompt, imageUrl, opts) {
   const body = {
     model: 'kontext',
+    prompt: prompt,
     image: imageUrl,
     width: opts.width,
     height: opts.height,
