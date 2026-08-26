@@ -822,6 +822,7 @@ async function generateVideo(reuse) {
     state.generating = false;
     assistant.think(false);
   }
+}
 
 // ---------- 音频/视频的 Key 可见性 ----------
 
