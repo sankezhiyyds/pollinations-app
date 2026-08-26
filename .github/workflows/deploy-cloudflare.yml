@@ -1,6 +1,5 @@
 # Deploy to Cloudflare Pages
-
-Triggers on push to main. Cloudflare Pages will build and serve the static files.
+name: Deploy to Cloudflare Pages
 
 on:
   push:
@@ -23,6 +22,5 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           projectName: pollinations-app
           directory: .
-          # No build step — this is a pure-static app, push existing files directly
           branch: main
           gitHubToken: ${{ secrets.GITHUB_TOKEN }}
