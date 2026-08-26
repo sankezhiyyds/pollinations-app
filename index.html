@@ -297,6 +297,7 @@
                   <option value="webm-vp8">WebM · VP8</option>
                   <option value="mp4">MP4 · H.264</option>
                   <option value="webp">WEBP（抽帧）</option>
+                  <option value="gif" data-i18n="tool.gifFormat">GIF（动图）</option>
                 </select>
               </div>
               <div class="grow" id="vconvQualityRow">
@@ -309,7 +310,7 @@
                 <span id="vconvWebpTip" class="hint hidden" data-i18n="tool.webpExtractTip"></span>
               </div>
             </div>
-            <p class="warn" data-i18n="tool.videoWarn">视频转码在浏览器本地实时进行，不依赖服务器、无需下载引擎；转码耗时约等于视频时长，请保持页面在前台</p>
+            <p class="warn" data-i18n="tool.videoWarn">视频转码在浏览器本地实时进行，不依赖服务器、无需下载引擎；GIF 会逐帧编码，请保持页面在前台</p>
             <button id="vconvBtn" class="btn primary" data-i18n="tool.convert">转换并下载</button>
             <p id="vconvHint" class="hint"></p>
           </div>
@@ -399,6 +400,7 @@
   </div>
 </div>
 
+<script src="./vendor/gifjs/gif.js"></script>
 <script src="./i18n.js"></script>
 <script src="./app.js"></script>
 <footer class="site-footer">

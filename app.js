@@ -1777,6 +1777,81 @@ function formatBytes(n) {
   return (n / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+function encodeVideoAsGif(file, quality, onProgress) {
+  return new Promise((resolve, reject) => {
+    if (typeof GIF !== 'function') {
+      reject(new Error('GIF 编码器加载失败，请刷新页面后重试'));
+      return;
+    }
+    const video = document.createElement('video');
+    video.muted = true;
+    video.playsInline = true;
+    video.preload = 'auto';
+    const canvas = document.createElement('canvas');
+    const srcURL = URL.createObjectURL(file);
+    let settled = false;
+    let frameTimer = null;
+    let seekHandler = null;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      if (frameTimer) clearTimeout(frameTimer);
+      if (seekHandler) video.removeEventListener('seeked', seekHandler);
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+      URL.revokeObjectURL(srcURL);
+      fn(value);
+    };
+    const fail = err => finish(reject, err);
+    video.onerror = () => fail(new Error('无法解码该视频文件'));
+    video.onloadedmetadata = () => {
+      const width = Math.max(1, video.videoWidth);
+      const height = Math.max(1, video.videoHeight);
+      const scale = Math.min(1, 480 / width);
+      canvas.width = Math.max(1, Math.round(width * scale));
+      canvas.height = Math.max(1, Math.round(height * scale));
+      const duration = Math.min(video.duration || 0, 60);
+      if (!duration) {
+        fail(new Error('视频时长无效'));
+        return;
+      }
+      const frameStep = 0.1;
+      const frameCount = Math.max(1, Math.ceil(duration / frameStep));
+      const gif = new GIF({
+        workers: 2,
+        quality: { '18': 3, '23': 10, '28': 20 }[quality] || 10,
+        width: canvas.width,
+        height: canvas.height,
+        workerScript: './vendor/gifjs/gif.worker.js'
+      });
+      gif.on('progress', ratio => {
+        if (onProgress) onProgress(0.5 + ratio * 0.5);
+      });
+      gif.on('error', err => fail(new Error('GIF 编码失败：' + (err && err.message ? err.message : err))));
+      gif.on('finished', blob => finish(resolve, blob));
+      let frameIndex = 0;
+      seekHandler = () => {
+        if (settled) return;
+        canvas.getContext('2d').drawImage(video, 0, 0, canvas.width, canvas.height);
+        gif.addFrame(canvas, { copy: true, delay: 100 });
+        frameIndex += 1;
+        if (onProgress) onProgress(frameIndex / frameCount * 0.5);
+        if (frameIndex >= frameCount) {
+          gif.render();
+          return;
+        }
+        frameTimer = setTimeout(() => {
+          video.currentTime = Math.min(duration, frameIndex * frameStep);
+        }, 0);
+      };
+      video.addEventListener('seeked', seekHandler);
+      video.currentTime = 0;
+    };
+    video.src = srcURL;
+  });
+}
+
 async function handleVconvUpload(file) {
   if (!file || !file.type.startsWith('video/')) return;
   vconvFile = file;
@@ -1791,7 +1866,7 @@ async function handleVconvUpload(file) {
 
 async function convertVideo() {
   if (!vconvFile) return;
-  const format = $('vconvFormat').value;      // webm-vp9 / webm-vp8 / mp4 / webp
+  const format = $('vconvFormat').value;      // webm-vp9 / webm-vp8 / mp4 / gif / webp
   const quality = $('vconvQuality').value;    // 18 / 23 / 28（沿用原有档位语义：越小越好）
   const btn = $('vconvBtn');
   const hint = $('vconvHint');
@@ -1801,7 +1876,6 @@ async function convertVideo() {
   hint.textContent = t('tool.converting');
 
   try {
-    // WEBP：抽单帧 → canvas 导出，无需录制
     if (format === 'webp') {
       const blob = await extractFrameAsWebp(vconvFile, quality);
       triggerDownload(blob, 'frame.webp');
@@ -1810,7 +1884,16 @@ async function convertVideo() {
       return;
     }
 
-    // 其余走实时录制。先确认浏览器支持目标编解码器
+    if (format === 'gif') {
+      const blob = await encodeVideoAsGif(vconvFile, quality, ratio => {
+        hint.textContent = t('tool.converting') + ' ' + Math.round(ratio * 100) + '%';
+      });
+      triggerDownload(blob, 'converted.gif');
+      hint.textContent = '';
+      toast(t('tool.done'));
+      return;
+    }
+
     const mime = pickRecorderMime(format);
     if (!mime) {
       hint.textContent = t('tool.formatUnsupported');
