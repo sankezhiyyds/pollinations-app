@@ -26,10 +26,20 @@ const STORE = {
 };
 
 const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
+const FREE_IMAGE_MODELS = ['flux', 'turbo'];
+const PREMIUM_IMAGE_MODELS = ['kontext', 'gptimage', 'seedream', 'klein', 'gptimage-large', 'gpt-image-2', 'nova-canvas', 'dreamshaper', 'zimage'];
 const FALLBACK_TEXT_MODELS = ['openai', 'openai-fast', 'openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
+const FREE_TEXT_MODELS = ['openai', 'openai-fast'];
+const PREMIUM_TEXT_MODELS = ['openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
 const FALLBACK_AUDIO_MODELS = ['grok-tts', 'qwen-tts', 'elevenlabs', 'elevenflash', 'kokoro', 'fish-audio-s2.1-pro'];
+const FREE_AUDIO_MODELS = ['grok-tts', 'qwen-tts'];
+const PREMIUM_AUDIO_MODELS = ['elevenlabs', 'elevenflash', 'kokoro', 'fish-audio-s2.1-pro'];
 const FALLBACK_VIDEO_MODELS = ['minimax-h3', 'seedance-2.0', 'veo', 'wan', 'wan-fast', 'wan-pro', 'nova-reel'];
+const FREE_VIDEO_MODELS = ['minimax-h3'];
+const PREMIUM_VIDEO_MODELS = ['seedance-2.0', 'veo', 'wan', 'wan-fast', 'wan-pro', 'nova-reel'];
 const FALLBACK_VIDEO_RESOLUTIONS = ['480p', '720p', '1k', '1080p', '2k', '4k'];
+const VIDEO_RES_FREE = ['480p', '720p'];
+const VIDEO_RES_PREMIUM = ['480p', '720p', '1k', '1080p', '2k', '4k'];
 
 const state = {
   apiKey: '',
@@ -41,7 +51,9 @@ const state = {
   lastAudio: null,
   lastVideo: null,
   abort: null,
-  generating: false
+  generating: false,
+  tokensUsed: 0,
+  creditRate: 1000 // 1000 tokens ≈ 1 credit (Pollinations 参考换算)
 };
 
 const $ = id => document.getElementById(id);
@@ -200,6 +212,7 @@ function doLogout() {
   state.apiKey = '';
   state.anonymous = false;
   state.balance = null;
+  state.tokensUsed = 0;
   state.messages = [];
   state.lastImage = null;
   state.lastAudio = null;
@@ -209,6 +222,10 @@ function doLogout() {
   updateBadge();
   $('logoutBtn').classList.add('hidden');
   $('loginBtn').classList.remove('hidden');
+  updateImageModelSelect();
+  updateTextModelSelect();
+  updateAudioModelSelect();
+  updateVideoModelSelect();
   openLoginModal();
 }
 
@@ -240,28 +257,40 @@ function updateBadge() {
     badge.className = 'badge gray';
     badge.classList.remove('hidden');
   } else {
-    badge.textContent = state.balance != null
-      ? t('tier.key') + ' · ' + state.balance.toFixed(2)
-      : t('tier.key');
+    let parts = [t('tier.key')];
+    if (state.balance != null) {
+      parts.push(state.balance.toFixed(2) + ' ' + t('tier.credits'));
+    }
+    if (state.tokensUsed > 0) {
+      parts.push('· ' + fmtTokens(state.tokensUsed));
+    }
+    badge.textContent = parts.join(' ');
     badge.className = 'badge green';
     badge.classList.remove('hidden');
   }
+}
+
+function fmtTokens(n) {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(1) + 'K';
+  return String(n);
 }
 
 // ---------- 模型列表 ----------
 
 // 新版接口拿不到就退回预置列表，保证界面永远可用
 async function loadModels() {
-  const defaultModel = state.apiKey ? 'gptimage' : 'flux';
-  fillSelect($('imgModel'), FALLBACK_IMAGE_MODELS, defaultModel);
-  fillSelect($('txtModel'), FALLBACK_TEXT_MODELS, 'openai');
+  updateImageModelSelect();
+  updateTextModelSelect();
+  updateAudioModelSelect();
+  updateVideoModelSelect();
 
   try {
     const res = await fetch(API.base + '/image/models', { headers: authHeaders() });
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) fillSelectWithBadges($('imgModel'), list, defaultModel);
+      if (list.length && state.apiKey) updateImageModelSelect(list);
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -270,7 +299,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) fillSelect($('txtModel'), list, 'openai');
+      if (list.length && state.apiKey) updateTextModelSelect(list);
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -279,7 +308,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) fillSelect($('audModel'), list, 'grok-tts');
+      if (list.length && state.apiKey) updateAudioModelSelect(list);
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -288,9 +317,59 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) fillSelect($('vidModel'), list, 'minimax-h3');
+      if (list.length && state.apiKey) updateVideoModelSelect(list);
     }
   } catch (e) { /* 静默回退 */ }
+}
+
+const IMG_RATIO_FREE = ['512x512','768x768','1024x1024','1024x768','768x1024','1280x720','720x1280'];
+const IMG_RATIO_PREMIUM = ['512x512','768x768','1024x1024','1024x768','768x1024','1280x720','720x1280','1536x1024','1024x1536','2048x1024','1024x2048','2048x2048'];
+
+function updateImageModelSelect(apiList) {
+  const sel = $('imgModel');
+  const ratioSel = $('imgRatio');
+  const ratioHint = $('ratioHint');
+  const modelHint = $('modelHint');
+
+  if (state.apiKey) {
+    const list = apiList || FALLBACK_IMAGE_MODELS;
+    fillSelectWithBadges(sel, list, 'gptimage');
+    // 已登录：解锁全分辨率选项
+    fillRatioSelect(ratioSel, IMG_RATIO_PREMIUM, '1024x1024');
+    ratioHint.textContent = t('img.ratioPremium');
+    ratioHint.style.color = 'var(--ok)';
+  } else {
+    // 未登录：只显示免费模型
+    fillSelect(sel, FREE_IMAGE_MODELS, 'flux');
+    fillRatioSelect(ratioSel, IMG_RATIO_FREE, '1024x1024');
+    ratioHint.textContent = '';
+  }
+  updateModelHint();
+}
+
+function fillRatioSelect(sel, ratios, preferred) {
+  sel.innerHTML = '';
+  const ratioLabels = {
+    '512x512': '1:1 · 512×512',
+    '768x768': '1:1 · 768×768',
+    '1024x1024': '1:1 · 1024×1024',
+    '1024x768': '4:3 · 1024×768',
+    '768x1024': '3:4 · 768×1024',
+    '1280x720': '16:9 · 1280×720',
+    '720x1280': '9:16 · 720×1280',
+    '1536x1024': '3:2 · 1536×1024',
+    '1024x1536': '2:3 · 1024×1536',
+    '2048x1024': '2:1 · 2048×1024',
+    '1024x2048': '1:2 · 1024×2048',
+    '2048x2048': '1:1 · 2048×2048'
+  };
+  ratios.forEach(r => {
+    const opt = document.createElement('option');
+    opt.value = r;
+    opt.textContent = ratioLabels[r] || r;
+    sel.appendChild(opt);
+  });
+  if (ratios.includes(preferred)) sel.value = preferred;
 }
 
 // 兼容三种返回形态：字符串数组 / 对象数组 / OpenAI 风格 {data:[...]}
@@ -312,7 +391,7 @@ function fillSelect(sel, list, preferred) {
   if (list.includes(preferred)) sel.value = preferred;
 }
 
-// 带模型标签的填充：为 premium 模型添加 🌟 前缀
+// 带模型标签的填充：为 premium 模型添加 🌟 前缀，未登录时禁用付费模型
 function fillSelectWithBadges(sel, list, preferred) {
   sel.innerHTML = '';
   list.forEach(name => {
@@ -320,28 +399,91 @@ function fillSelectWithBadges(sel, list, preferred) {
     opt.value = name;
     const isPremium = PREMIUM_IMAGE_MODELS.includes(name);
     opt.textContent = isPremium ? '🌟 ' + name : name;
+    if (!state.apiKey && isPremium) {
+      opt.disabled = true;
+      opt.textContent += ' 🔒';
+    }
     sel.appendChild(opt);
   });
-  // 优先选 premium 模型（有 key 时），否则选第一个
-  const actualPreferred = state.apiKey && list.includes(preferred) ? preferred : (state.apiKey ? list.find(m => PREMIUM_IMAGE_MODELS.includes(m)) : preferred);
-  if (actualPreferred && list.includes(actualPreferred)) sel.value = actualPreferred;
+  if (list.includes(preferred)) sel.value = preferred;
 }
 
 function updateModelHint() {
   const model = $('imgModel').value;
   const hint = $('modelHint');
   if (!hint) return;
-  if (PREMIUM_IMAGE_MODELS.includes(model)) {
-    if (!state.apiKey) {
-      hint.textContent = t('img.modelNeedKey');
-      hint.style.color = 'var(--danger)';
-    } else {
-      hint.textContent = t('img.modelPremium');
-      hint.style.color = 'var(--ok)';
-    }
+  if (!state.apiKey && PREMIUM_IMAGE_MODELS.includes(model)) {
+    hint.textContent = t('img.modelNeedKey');
+    hint.style.color = 'var(--danger)';
+  } else if (PREMIUM_IMAGE_MODELS.includes(model) && state.apiKey) {
+    hint.textContent = t('img.modelPremium');
+    hint.style.color = 'var(--ok)';
   } else {
     hint.textContent = '';
   }
+}
+
+function updateTextModelSelect(apiList) {
+  const sel = $('txtModel');
+  const hint = $('txtModelHint');
+  if (state.apiKey) {
+    const list = apiList || FALLBACK_TEXT_MODELS;
+    fillSelectWithBadgesForType(sel, list, PREMIUM_TEXT_MODELS, 'openai-large', 'txt');
+    hint.textContent = '';
+  } else {
+    fillSelect(sel, FREE_TEXT_MODELS, 'openai');
+    hint.textContent = '';
+  }
+}
+
+function updateAudioModelSelect(apiList) {
+  const sel = $('audModel');
+  const hint = $('audModelHint');
+  if (state.apiKey) {
+    const list = apiList || FALLBACK_AUDIO_MODELS;
+    fillSelectWithBadgesForType(sel, list, PREMIUM_AUDIO_MODELS, 'elevenlabs', 'aud');
+    hint.textContent = '';
+  } else {
+    fillSelect(sel, FREE_AUDIO_MODELS, 'grok-tts');
+    hint.textContent = '';
+  }
+}
+
+function updateVideoModelSelect(apiList) {
+  const sel = $('vidModel');
+  const resSel = $('vidRes');
+  const modelHint = $('vidModelHint');
+  const resHint = $('vidResHint');
+  if (state.apiKey) {
+    const list = apiList || FALLBACK_VIDEO_MODELS;
+    fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'seedance-2.0', 'vid');
+    fillSelect(resSel, VIDEO_RES_PREMIUM, '1080p');
+    resHint.textContent = t('vid.resPremium');
+    resHint.style.color = 'var(--ok)';
+    modelHint.textContent = '';
+  } else {
+    fillSelect(sel, FREE_VIDEO_MODELS, 'minimax-h3');
+    fillSelect(resSel, VIDEO_RES_FREE, '720p');
+    resHint.textContent = t('vid.resFree');
+    resHint.style.color = '';
+    modelHint.textContent = '';
+  }
+}
+
+function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix) {
+  sel.innerHTML = '';
+  list.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    const isPremium = premiumList.includes(name);
+    opt.textContent = isPremium ? '🌟 ' + name : name;
+    if (!state.apiKey && isPremium) {
+      opt.disabled = true;
+      opt.textContent += ' 🔒';
+    }
+    sel.appendChild(opt);
+  });
+  if (list.includes(preferred)) sel.value = preferred;
 }
 
 // ---------- 图片生成 ----------
@@ -803,6 +945,10 @@ async function sendMessage() {
     }
   } else {
     assistant.say('ast.textDone');
+    if (state.tokensUsed > 0) {
+      const credits = (state.tokensUsed / state.creditRate).toFixed(2);
+      toast(t('ast.tokenCount', { n: fmtTokens(state.tokensUsed), c: credits }));
+    }
     pushHistory({
       type: 'text',
       prompt: text,
@@ -877,6 +1023,8 @@ async function streamChat(endpoint, payload, idx) {
             state.messages[idx].content += delta;
             renderChat();
           }
+          const usage = json.usage;
+          if (usage && usage.total_tokens) state.tokensUsed += usage.total_tokens;
         } catch (e) { /* 跳过不完整分片 */ }
       }
     }
@@ -1023,6 +1171,27 @@ function bindEvents() {
   $('dlBtn').addEventListener('click', downloadImage);
   $('seedBtn').addEventListener('click', () => { $('imgSeed').value = randSeed(); });
   $('imgModel').addEventListener('change', () => updateModelHint());
+  $('txtModel').addEventListener('change', () => {
+    const h = $('txtModelHint'); if (!h) return;
+    const m = $('txtModel').value;
+    if (!state.apiKey && PREMIUM_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelNeedKey'); h.style.color = 'var(--danger)'; }
+    else if (PREMIUM_TEXT_MODELS.includes(m) && state.apiKey) { h.textContent = t('txt.modelPremium'); h.style.color = 'var(--ok)'; }
+    else { h.textContent = ''; }
+  });
+  $('audModel').addEventListener('change', () => {
+    const h = $('audModelHint'); if (!h) return;
+    const m = $('audModel').value;
+    if (!state.apiKey && PREMIUM_AUDIO_MODELS.includes(m)) { h.textContent = t('aud.modelNeedKey'); h.style.color = 'var(--danger)'; }
+    else if (PREMIUM_AUDIO_MODELS.includes(m) && state.apiKey) { h.textContent = t('aud.modelPremium'); h.style.color = 'var(--ok)'; }
+    else { h.textContent = ''; }
+  });
+  $('vidModel').addEventListener('change', () => {
+    const h = $('vidModelHint'); if (!h) return;
+    const m = $('vidModel').value;
+    if (!state.apiKey && PREMIUM_VIDEO_MODELS.includes(m)) { h.textContent = t('vid.modelNeedKey'); h.style.color = 'var(--danger)'; }
+    else if (PREMIUM_VIDEO_MODELS.includes(m) && state.apiKey) { h.textContent = t('vid.modelPremium'); h.style.color = 'var(--ok)'; }
+    else { h.textContent = ''; }
+  });
 
   // 音频
   $('audBtn').addEventListener('click', () => generateAudio(false));
@@ -1040,7 +1209,7 @@ function bindEvents() {
   // 文本
   $('sendBtn').addEventListener('click', sendMessage);
   $('stopBtn').addEventListener('click', () => state.abort && state.abort.abort());
-  $('clearBtn').addEventListener('click', () => { state.messages = []; renderChat(); });
+  $('clearBtn').addEventListener('click', () => { state.messages = []; state.tokensUsed = 0; renderChat(); });
   $('txtTemp').addEventListener('input', e => { $('tempVal').textContent = e.target.value; });
 
   const ta = $('txtInput');

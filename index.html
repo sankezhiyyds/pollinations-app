@@ -17,7 +17,7 @@
     <div class="brand">
       <span class="brand-dot"></span>
       <span class="brand-name" data-i18n="app.title">Pollinations Studio</span>
-      <span id="tierBadge" class="badge hidden"></span>
+      <span id="tierBadge" class="badge hidden" data-i18n-title="tier.tokenHint"></span>
     </div>
     <div class="topbar-right">
       <select id="langSelect" class="mini-select" data-i18n-title="header.lang" title="语言">
@@ -78,6 +78,7 @@
               <option value="1280x720">16:9 · 1280×720</option>
               <option value="720x1280">9:16 · 720×1280</option>
             </select>
+            <span class="meta" id="ratioHint" data-i18n="img.ratioFree"></span>
           </div>
         </div>
 
@@ -119,6 +120,7 @@
           <div class="grow">
             <label class="lbl" data-i18n="txt.model">模型</label>
             <select id="txtModel" class="select"></select>
+            <span class="meta" id="txtModelHint"></span>
           </div>
           <div class="grow">
             <label class="lbl"><span data-i18n="txt.temp">温度</span> <b id="tempVal">0.7</b></label>
@@ -156,6 +158,7 @@
           <div class="grow">
             <label class="lbl" data-i18n="aud.model">模型</label>
             <select id="audModel" class="select"></select>
+            <span class="meta" id="audModelHint"></span>
           </div>
           <div class="grow">
             <label class="lbl" data-i18n="aud.voice">音色</label>
@@ -208,10 +211,12 @@
           <div class="grow">
             <label class="lbl" data-i18n="vid.model">模型</label>
             <select id="vidModel" class="select"></select>
+            <span class="meta" id="vidModelHint"></span>
           </div>
           <div class="grow">
             <label class="lbl" data-i18n="vid.resolution">分辨率</label>
             <select id="vidRes" class="select"></select>
+            <span class="meta" id="vidResHint"></span>
           </div>
         </div>
 
