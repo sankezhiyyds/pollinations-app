@@ -805,13 +805,23 @@ async function generateVideo(reuse) {
     $('vidStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
     $('vidHint').textContent = msg;
     assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
+    let remaining = state.apiKey ? 10 : 15;
+    $('vidBtn').disabled = true;
+    $('vidBtn').textContent = t('vid.retryWait', { n: remaining });
+    const interval = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        clearInterval(interval);
+        $('vidBtn').disabled = false;
+        $('vidBtn').textContent = t('vid.generate');
+      } else {
+        $('vidBtn').textContent = t('vid.retryWait', { n: remaining });
+      }
+    }, 1000);
   } finally {
     state.generating = false;
     assistant.think(false);
-    $('vidBtn').disabled = false;
-    $('vidBtn').textContent = t('vid.generate');
   }
-}
 
 // ---------- 音频/视频的 Key 可见性 ----------
 
@@ -822,6 +832,7 @@ function updateNeedKeyVisibility() {
 }
 
 // 图生图 POST 请求（避免 GET URI 超长）
+// image.pollinations.ai/prompt POST 返回直接图片二进制流（Content-Type: image/jpeg）
 async function loadImageFromPost(prompt, imageUrl, opts) {
   const body = {
     model: 'kontext',
@@ -838,20 +849,11 @@ async function loadImageFromPost(prompt, imageUrl, opts) {
   const url = API.legacyImage + '/prompt';
   const res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body) });
   if (!res.ok) throw new Error('HTTP ' + res.status);
-  const data = await res.json();
 
-  // 新格式：{ image: 'base64...', width: N, height: N, ... }
-  if (data.image && typeof data.image === 'string') {
-    const mimeType = data.format === 'png' ? 'image/png' : 'image/jpeg';
-    const b64 = data.image.startsWith('data:') ? data.image : 'data:' + mimeType + ';base64,' + data.image;
-    const objUrl = URL.createObjectURL(await (await fetch(b64)).blob());
-    return loadImage(objUrl);
-  }
-
-  // 兼容旧格式：{ url: '...' }
-  const imgUrl = data.url || data.image_url;
-  if (!imgUrl) throw new Error('no image in response');
-  return loadImage(imgUrl);
+  // 响应是直接图片二进制流，转成 blob URL
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  return loadImage(objUrl);
 }
 
 // 单个 URL 加载，回传真实尺寸
