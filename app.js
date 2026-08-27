@@ -497,7 +497,7 @@ function updateTextModelSelect(apiList) {
   const hint = $('txtModelHint');
   if (state.apiKey) {
     const list = apiList || FALLBACK_TEXT_MODELS;
-    fillSelectWithBadgesForType(sel, list, PREMIUM_TEXT_MODELS, 'openai-large', 'txt');
+    fillSelectWithBadgesForType(sel, list, PREMIUM_TEXT_MODELS, 'openai-large', 'txt', FREE_TEXT_MODELS);
     hint.textContent = '';
   } else {
     fillSelect(sel, FREE_TEXT_MODELS, 'openai');
@@ -557,18 +557,21 @@ function fillVideoResolutionSelect(sel, list, preferred) {
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
-function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix) {
+function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix, freeList) {
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
     const isPremium = premiumList.includes(name);
+    const isFree = freeList && freeList.includes(name);
     if (isPremium) {
       opt.textContent = '🌟 ' + name;
       if (!state.apiKey) {
         opt.disabled = true;
         opt.textContent += ' 🔒';
       }
+    } else if (isFree) {
+      opt.textContent = '🆓 ' + name;
     } else {
       opt.textContent = name;
     }
@@ -960,10 +963,11 @@ function updateNeedKeyVisibility() {
   // 匿名模式：显示"需要 Key"提示；已登录：隐藏
   $('audioNeedKey').classList.toggle('hidden', !(!hasKey));
   $('videoNeedKey').classList.toggle('hidden', !(!hasKey));
-  // 已登录：显示费用警告（图片/音频/视频均需付费，除 flux 外）
+  // 已登录：显示费用警告（图片/音频/视频/文本均需付费，除免费模型外）
   $('imgCostWarn').classList.toggle('hidden', !hasKey);
   $('audCostWarn').classList.toggle('hidden', !hasKey);
   $('vidCostWarn').classList.toggle('hidden', !hasKey);
+  $('txtCostWarn').classList.toggle('hidden', !hasKey);
 }
 
 // data URL 转 Blob，用于 multipart 上传
@@ -1409,7 +1413,8 @@ function bindEvents() {
   $('txtModel').addEventListener('change', () => {
     const h = $('txtModelHint'); if (!h) return;
     const m = $('txtModel').value;
-    if (!state.apiKey && PREMIUM_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelNeedKey'); h.style.color = 'var(--danger)'; }
+    if (FREE_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelFree'); h.style.color = 'var(--ok)'; }
+    else if (!state.apiKey && PREMIUM_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelNeedKey'); h.style.color = 'var(--danger)'; }
     else if (PREMIUM_TEXT_MODELS.includes(m) && state.apiKey) { h.textContent = t('txt.modelPremium'); h.style.color = 'var(--ok)'; }
     else { h.textContent = ''; }
   });

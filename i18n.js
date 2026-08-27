@@ -43,6 +43,7 @@ const LOCALES = {
     'cost.image': '⚠️ 除 flux 外，大部分图片模型需要消耗 Pollen 积分。🌟 标记的模型为付费模型',
     'cost.audio': '⚠️ 语音合成需要消耗 Pollen 积分，所有模型均需付费',
     'cost.video': '⚠️ 视频生成费用较高，按时长和分辨率计费，请确认后再生成',
+    'cost.text': '⚠️ 文本对话按 token 计费，大部分模型需消耗积分（openai/openai-fast 免费）。具体以服务端账单为准',
 
     'aud.text': '要朗读的文本',
     'aud.textPh': '你好，欢迎使用 Pollinations Studio。来试试看吧！',
@@ -98,6 +99,7 @@ const LOCALES = {
     'img.ratioPremium': '✨ 付费模型支持最高 2048px',
     'img.freePixelCap': '匿名模式像素超限，已等比调整为 {w}×{h}',
     'txt.modelNeedKey': '❌ 需要登录才能使用高级模型',
+    'txt.modelFree': '🆓 免费模型，无需积分',
     'txt.modelPremium': '✨ 高级模型，能力更强',
     'aud.modelNeedKey': '❌ 需要登录才能使用高级模型',
     'aud.modelPremium': '✨ 高级模型，音质更好',
@@ -234,6 +236,7 @@ const LOCALES = {
     'cost.image': '⚠️ Most image models cost Pollen credits (except flux which is free). 🌟 models are paid',
     'cost.audio': '⚠️ Speech synthesis costs Pollen credits — all models are paid',
     'cost.video': '⚠️ Video generation is expensive — billed by duration & resolution. Confirm before generating',
+    'cost.text': '⚠️ Text chat is billed by tokens; most models cost credits (openai/openai-fast are free). Check your provider bill for details',
 
     'aud.text': 'Text to read',
     'aud.textPh': 'Hello and welcome to Pollinations Studio! Give it a try.',
@@ -284,6 +287,7 @@ const LOCALES = {
     'img.ratioPremium': '✨ Premium models support up to 2048px',
     'img.freePixelCap': 'Over the anonymous pixel budget, scaled to {w}×{h}',
     'txt.modelNeedKey': '❌ Sign in for premium models',
+    'txt.modelFree': '🆓 Free model, no credits needed',
     'txt.modelPremium': '✨ Premium model, more capable',
     'aud.modelNeedKey': '❌ Sign in for premium models',
     'aud.modelPremium': '✨ Premium model, better quality',
@@ -425,6 +429,7 @@ const LOCALES = {
     'cost.image': '⚠️ flux を除くほとんどの画像モデルは Pollen クレジットを消費します。🌟 マークは有料モデルです',
     'cost.audio': '⚠️ 音声合成は Pollen クレジットを消費します。すべてのモデルが有料です',
     'cost.video': '⚠️ 動画生成は高額です。長さと解像度で課金されます。確認してから生成してください',
+    'cost.text': '⚠️ テキスト会話はお金を要するトークン単位で課金されます（openai/openai-fast は無料）。実際の課金はサーバー側で決定されます',
 
     'aud.text': '読み上げるテキスト',
     'aud.textPh': 'こんにちは、Pollinations スタジオへようこそ！やってみてください',
@@ -475,6 +480,7 @@ const LOCALES = {
     'img.ratioPremium': '✨ プレミアムモデルは最大 2048px 対応',
     'img.freePixelCap': '匿名モードのピクセル上限を超えたため {w}×{h} に調整しました',
     'txt.modelNeedKey': '❌ プレミアムモデルはログインが必要です',
+    'txt.modelFree': '🆓 フリーモデル、クレジット不要',
     'txt.modelPremium': '✨ プレミアムモデル、高性能',
     'aud.modelNeedKey': '❌ プレミアムモデルはログインが必要です',
     'aud.modelPremium': '✨ プレミアムモデル、高音質',
