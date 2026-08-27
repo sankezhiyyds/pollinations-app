@@ -30,7 +30,13 @@ const LOCALES = {
     'tier.key': '已登录',
     'tier.anon': '匿名',
     'tier.credits': '积分',
+    'tier.total': '总计',
     'tier.tokenHint': '文本：约 1000 tokens ≈ 1 积分；图片/音频/视频按模型与参数独立计费。具体以服务端账单为准',
+
+    'stat.text': '{n} tokens ≈ {c} 积分',
+    'stat.image': '图片 ×{n}（{c} 积分）',
+    'stat.audio': '音频 ×{n}（{c} 积分）',
+    'stat.video': '视频 ×{n}（{c} 积分）',
 
     'nav.image': '图片生成',
     'nav.text': '文本对话',
@@ -225,7 +231,13 @@ const LOCALES = {
     'tier.key': 'Signed in',
     'tier.anon': 'Anonymous',
     'tier.credits': 'credits',
+    'tier.total': 'total',
     'tier.tokenHint': 'Text: ~1000 tokens ≈ 1 credit; image/audio/video are billed separately by model & params. Check your provider bill for details',
+
+    'stat.text': '{n} tokens ≈ {c} credits',
+    'stat.image': 'Image ×{n} ({c} credits)',
+    'stat.audio': 'Audio ×{n} ({c} credits)',
+    'stat.video': 'Video ×{n} ({c} credits)',
 
     'nav.image': 'Image',
     'nav.text': 'Chat',
@@ -420,7 +432,13 @@ const LOCALES = {
     'tier.key': 'ログイン中',
     'tier.anon': '匿名',
     'tier.credits': 'クレジット',
+    'tier.total': '合計',
     'tier.tokenHint': 'テキスト：約1000トークン ≈ 1クレジット。画像/音声/動画はモデル別に課金されます。実際の課金はサーバー側で決定されます',
+
+    'stat.text': '{n}トークン ≈ {c}クレジット',
+    'stat.image': '画像 ×{n}（{c}クレジット）',
+    'stat.audio': '音声 ×{n}（{c}クレジット）',
+    'stat.video': '動画 ×{n}（{c}クレジット）',
 
     'nav.image': '画像生成',
     'nav.text': 'チャット',

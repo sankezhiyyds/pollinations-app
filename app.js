@@ -58,7 +58,17 @@ const state = {
   abort: null,
   generating: false,
   tokensUsed: 0,
-  creditRate: 1000 // 1000 tokens ≈ 1 credit (Pollinations 参考换算)
+  creditRate: 1000, // 1000 tokens ≈ 1 credit
+  // 消耗统计（按类型）
+  stats: {
+    textTokens: 0,   // 文本对话 token 数
+    imageCount: 0,   // 图片生成次数
+    imageCost: 0,    // 图片消耗积分（估算）
+    audioCount: 0,   // 音频生成次数
+    audioCost: 0,    // 音频消耗积分（估算）
+    videoCount: 0,   // 视频生成次数
+    videoCost: 0     // 视频消耗积分（估算）
+  }
 };
 
 const $ = id => document.getElementById(id);
@@ -274,10 +284,16 @@ function updateBadge() {
     if (state.balance != null) {
       parts.push(state.balance.toFixed(2) + ' ' + t('tier.credits'));
     }
-    if (state.tokensUsed > 0) {
-      const credits = (state.tokensUsed / state.creditRate).toFixed(2);
-      parts.push(fmtTokens(state.tokensUsed) + ' tokens · ' + credits + ' ' + t('tier.credits'));
-    }
+    // 显示消耗统计
+    const totalCost = state.stats.imageCost + state.stats.audioCost + state.stats.videoCost;
+    const textCredits = state.stats.textTokens > 0 ? (state.stats.textTokens / state.creditRate).toFixed(2) : '0';
+    let stats = [];
+    if (state.stats.textTokens > 0) stats.push(t('stat.text', {n: fmtTokens(state.stats.textTokens), c: textCredits}));
+    if (state.stats.imageCount > 0) stats.push(t('stat.image', {n: state.stats.imageCount, c: state.stats.imageCost.toFixed(2)}));
+    if (state.stats.audioCount > 0) stats.push(t('stat.audio', {n: state.stats.audioCount, c: state.stats.audioCost.toFixed(2)}));
+    if (state.stats.videoCount > 0) stats.push(t('stat.video', {n: state.stats.videoCount, c: state.stats.videoCost.toFixed(2)}));
+    if (stats.length > 0) parts.push(stats.join(' · '));
+    if (totalCost > 0) parts.push('≈' + totalCost.toFixed(2) + t('tier.total'));
     badge.textContent = parts.join(' ');
     badge.className = 'badge green';
     badge.classList.remove('hidden');
@@ -310,9 +326,31 @@ async function refreshBalance() {
 }
 
 // 每次生成成功后调用：刷新余额，若确有消耗则 toast 提示
-function reportSpend() {
+function reportSpend(type) {
+  if (!state.apiKey) return;
   refreshBalance().then(delta => {
-    if (delta != null && delta > 0) toast(t('ast.creditSpent', { c: delta.toFixed(2) }));
+    if (delta != null && delta > 0) {
+      // 追踪统计
+      switch(type) {
+        case 'image':
+          state.stats.imageCount++;
+          state.stats.imageCost += delta;
+          break;
+        case 'audio':
+          state.stats.audioCount++;
+          state.stats.audioCost += delta;
+          break;
+        case 'video':
+          state.stats.videoCount++;
+          state.stats.videoCost += delta;
+          break;
+        case 'text':
+          // text tokens 已在 streamChat 中单独处理
+          break;
+      }
+      updateBadge();
+      toast(t('ast.creditSpent', { c: delta.toFixed(2) }));
+    }
   });
 }
 
@@ -760,7 +798,7 @@ async function generateImage(reuseSeed) {
     pushHistory({ type: 'image', prompt, model, seed, size: realW + 'x' + realH, url: histUrl, at: Date.now() });
 
     assistant.say(secs > 12 ? 'ast.imgSlow' : 'ast.imgDone', { s: secs });
-    reportSpend();
+    reportSpend('image');
     // 成功路径必须自己复位按钮：失败路径走倒计时，不能放在 finally 里统一处理
     state.generating = false;
     assistant.think(false);
@@ -858,7 +896,7 @@ async function generateAudio(reuse) {
     assistant.say('ast.audioDone', { s: secs });
     state.lastAudio = { url: local, prompt: text, model, voice, format, instructions };
     pushHistory({ type: 'audio', prompt: text, model, seed: null, size: format, url: local, at: Date.now() });
-    reportSpend();
+    reportSpend('audio');
   } catch (e) {
     const msg = e.message === 'no-key' ? t('need.key') : (state.apiKey ? t('aud.fail') : t('aud.rate'));
     $('audStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
@@ -934,7 +972,7 @@ async function generateVideo(reuse) {
     assistant.say('ast.videoDone', { s: secs });
     state.lastVideo = { url: local, prompt, model, resolution, duration, aspectRatio, audio };
     pushHistory({ type: 'video', prompt, model, seed, size: resolution, url: local, at: Date.now() });
-    reportSpend();
+    reportSpend('video');
   } catch (e) {
     const msg = state.apiKey ? t('vid.fail') : t('vid.rate');
     $('vidStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
@@ -1177,6 +1215,7 @@ async function sendMessage() {
     assistant.say('ast.textDone');
     if (responseUsage > 0) {
       state.tokensUsed += responseUsage;
+      state.stats.textTokens += responseUsage;
       updateBadge();
       toast(t('ast.tokenCount', {
         n: fmtTokens(responseUsage),
