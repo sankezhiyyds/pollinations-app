@@ -255,6 +255,35 @@ textarea { resize: vertical; line-height: 1.6; }
 .brand-name { font-weight: 700; font-size: 16.5px; }
 .topbar-right { display: flex; align-items: center; gap: 8px; }
 
+.usage-summary {
+  flex: 1 1 520px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+.usage-item,
+.usage-total,
+.usage-details {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.35;
+  white-space: nowrap;
+}
+.usage-total {
+  border-color: rgba(255, 193, 7, .45);
+  color: #e6a817;
+  font-weight: 700;
+}
+.usage-details { white-space: normal; }
+:root[data-theme="light"] .usage-total { color: #9a6b00; }
+
 .badge {
   font-size: 11.5px;
   padding: 3px 9px;
@@ -576,6 +605,8 @@ textarea { resize: vertical; line-height: 1.6; }
   .app { padding: 0 14px 90px; }
   .bubble { max-width: 170px; }
   .chat-box { height: 52vh; }
+  .usage-summary { order: 3; flex-basis: 100%; justify-content: flex-start; }
+  .usage-details { flex: 1 1 100%; }
 }
 
 /* 窄屏：让选项卡换行而非横向滚动，

@@ -228,6 +228,15 @@ function doLogout() {
   state.anonymous = false;
   state.balance = null;
   state.tokensUsed = 0;
+  state.stats = {
+    textTokens: 0,
+    imageCount: 0,
+    imageCost: 0,
+    audioCount: 0,
+    audioCost: 0,
+    videoCount: 0,
+    videoCost: 0
+  };
   state.messages = [];
   state.lastImage = null;
   state.lastAudio = null;
@@ -275,29 +284,28 @@ function enterApp() {
 
 function updateBadge() {
   const badge = $('tierBadge');
-  if (state.anonymous) {
-    badge.textContent = t('tier.anon');
-    badge.className = 'badge gray';
-    badge.classList.remove('hidden');
-  } else {
-    let parts = [t('tier.key')];
-    if (state.balance != null) {
-      parts.push(state.balance.toFixed(2) + ' ' + t('tier.credits'));
-    }
-    // 显示消耗统计
-    const totalCost = state.stats.imageCost + state.stats.audioCost + state.stats.videoCost;
-    const textCredits = state.stats.textTokens > 0 ? (state.stats.textTokens / state.creditRate).toFixed(2) : '0';
-    let stats = [];
-    if (state.stats.textTokens > 0) stats.push(t('stat.text', {n: fmtTokens(state.stats.textTokens), c: textCredits}));
-    if (state.stats.imageCount > 0) stats.push(t('stat.image', {n: state.stats.imageCount, c: state.stats.imageCost.toFixed(2)}));
-    if (state.stats.audioCount > 0) stats.push(t('stat.audio', {n: state.stats.audioCount, c: state.stats.audioCost.toFixed(2)}));
-    if (state.stats.videoCount > 0) stats.push(t('stat.video', {n: state.stats.videoCount, c: state.stats.videoCost.toFixed(2)}));
-    if (stats.length > 0) parts.push(stats.join(' · '));
-    if (totalCost > 0) parts.push('≈' + totalCost.toFixed(2) + t('tier.total'));
-    badge.textContent = parts.join(' ');
-    badge.className = 'badge green';
-    badge.classList.remove('hidden');
-  }
+  const mode = $('usageMode');
+  const balance = $('usageBalance');
+  const total = $('usageTotal');
+  const details = $('usageDetails');
+  const textCost = state.stats.textTokens / state.creditRate;
+  const totalCost = textCost + state.stats.imageCost + state.stats.audioCost + state.stats.videoCost;
+
+  badge.textContent = state.anonymous ? t('tier.anon') : t('tier.key');
+  badge.className = state.anonymous ? 'badge gray' : 'badge green';
+  badge.classList.remove('hidden');
+
+  if (mode) mode.textContent = (state.anonymous ? t('usage.modeAnon') : t('usage.modeKey'));
+  if (balance) balance.textContent = state.balance == null
+    ? t('usage.balanceUnknown')
+    : t('usage.balance', { c: state.balance.toFixed(2) });
+  if (total) total.textContent = t('usage.total', { c: totalCost.toFixed(2) });
+  if (details) details.textContent = t('usage.details', {
+    tokens: fmtTokens(state.stats.textTokens),
+    images: state.stats.imageCount,
+    audio: state.stats.audioCount,
+    video: state.stats.videoCount
+  });
 }
 
 function fmtTokens(n) {
@@ -327,27 +335,14 @@ async function refreshBalance() {
 
 // 每次生成成功后调用：刷新余额，若确有消耗则 toast 提示
 function reportSpend(type) {
+  if (type !== 'text') {
+    state.stats[type + 'Count']++;
+    updateBadge();
+  }
   if (!state.apiKey) return;
   refreshBalance().then(delta => {
     if (delta != null && delta > 0) {
-      // 追踪统计
-      switch(type) {
-        case 'image':
-          state.stats.imageCount++;
-          state.stats.imageCost += delta;
-          break;
-        case 'audio':
-          state.stats.audioCount++;
-          state.stats.audioCost += delta;
-          break;
-        case 'video':
-          state.stats.videoCount++;
-          state.stats.videoCost += delta;
-          break;
-        case 'text':
-          // text tokens 已在 streamChat 中单独处理
-          break;
-      }
+      state.stats[type + 'Cost'] += delta;
       updateBadge();
       toast(t('ast.creditSpent', { c: delta.toFixed(2) }));
     }
@@ -425,13 +420,20 @@ function updateImageModelSelect(apiList) {
     ratioHint.textContent = t('img.ratioPremium');
     ratioHint.style.color = 'var(--ok)';
   } else {
-    // 未登录：只显示免费模型
-    fillSelect(sel, FREE_IMAGE_MODELS, 'sana');
+    fillSelectWithBadges(sel, FREE_IMAGE_MODELS, 'sana');
     fillRatioSelect(ratioSel, IMG_RATIO_FREE, '768x768');
     ratioHint.textContent = t('img.ratioFree');
     ratioHint.style.color = '';
   }
   updateModelHint();
+}
+
+function billingLabel(name, freeList, premiumList) {
+  if (freeList.includes(name)) return t('billing.free') + ' · ' + name;
+  if (premiumList.includes(name)) return state.apiKey
+    ? t('billing.paid') + ' · ' + name
+    : t('billing.keyRequired') + ' · ' + name;
+  return t('billing.serverPrice') + ' · ' + name;
 }
 
 function fillRatioSelect(sel, ratios, preferred) {
@@ -458,7 +460,8 @@ function fillRatioSelect(sel, ratios, preferred) {
   ratios.forEach(r => {
     const opt = document.createElement('option');
     opt.value = r;
-    opt.textContent = ratioLabels[r] || r;
+    const isAnonymousSize = IMG_RATIO_FREE.includes(r);
+    opt.textContent = (isAnonymousSize ? t('billing.anonSize') : t('billing.keySize')) + ' · ' + (ratioLabels[r] || r);
     sel.appendChild(opt);
   });
   if (ratios.includes(current)) sel.value = current;
@@ -486,26 +489,14 @@ function fillSelect(sel, list, preferred) {
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
-// 带模型标签的填充：免费模型加 🆓，付费模型加 🌟；未登录时禁用付费模型
 function fillSelectWithBadges(sel, list, preferred) {
   const current = sel.value;
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
-    const isPremium = PREMIUM_IMAGE_MODELS.includes(name);
-    const isFree = FREE_IMAGE_MODELS.includes(name);
-    if (isPremium) {
-      opt.textContent = '🌟 ' + name;
-      if (!state.apiKey) {
-        opt.disabled = true;
-        opt.textContent += ' 🔒';
-      }
-    } else if (isFree) {
-      opt.textContent = '🆓 ' + name;
-    } else {
-      opt.textContent = name;
-    }
+    opt.textContent = billingLabel(name, FREE_IMAGE_MODELS, PREMIUM_IMAGE_MODELS);
+    if (!state.apiKey && PREMIUM_IMAGE_MODELS.includes(name)) opt.disabled = true;
     sel.appendChild(opt);
   });
   if (list.includes(current) && !(PREMIUM_IMAGE_MODELS.includes(current) && !state.apiKey)) sel.value = current;
@@ -526,36 +517,48 @@ function updateModelHint() {
     hint.textContent = t('img.modelPremium');
     hint.style.color = 'var(--ok)';
   } else {
-    hint.textContent = '';
+    hint.textContent = t('billing.serverPrice');
+    hint.style.color = 'var(--text-dim)';
+  }
+}
+
+function updateTypeModelHint(selectId, hintId, freeList, premiumList, prefix) {
+  const model = $(selectId).value;
+  const hint = $(hintId);
+  if (!hint) return;
+  if (freeList.includes(model)) {
+    hint.textContent = t(prefix + '.modelFree');
+    hint.style.color = 'var(--ok)';
+  } else if (premiumList.includes(model)) {
+    hint.textContent = state.apiKey ? t(prefix + '.modelPremium') : t(prefix + '.modelNeedKey');
+    hint.style.color = state.apiKey ? 'var(--text-dim)' : 'var(--danger)';
+  } else {
+    hint.textContent = t('billing.serverPrice');
+    hint.style.color = 'var(--text-dim)';
   }
 }
 
 function updateTextModelSelect(apiList) {
   const sel = $('txtModel');
-  const hint = $('txtModelHint');
   if (state.apiKey) {
     const list = apiList || FALLBACK_TEXT_MODELS;
     fillSelectWithBadgesForType(sel, list, PREMIUM_TEXT_MODELS, 'openai-large', 'txt', FREE_TEXT_MODELS);
-    hint.textContent = '';
   } else {
-    fillSelect(sel, FREE_TEXT_MODELS, 'openai');
-    hint.textContent = '';
+    fillSelectWithBadgesForType(sel, FREE_TEXT_MODELS, PREMIUM_TEXT_MODELS, 'openai', 'txt', FREE_TEXT_MODELS);
   }
+  updateTypeModelHint('txtModel', 'txtModelHint', FREE_TEXT_MODELS, PREMIUM_TEXT_MODELS, 'txt');
 }
 
 // 音频
 function updateAudioModelSelect(apiList) {
   const sel = $('audModel');
-  const hint = $('audModelHint');
   if (state.apiKey) {
     const list = apiList || FALLBACK_AUDIO_MODELS;
     fillSelectWithBadgesForType(sel, list, PREMIUM_AUDIO_MODELS, 'elevenlabs', 'aud', FREE_AUDIO_MODELS);
-    hint.textContent = '';
   } else {
-    fillSelect(sel, FREE_AUDIO_MODELS, 'grok-tts');
-    hint.textContent = t('aud.modelFree');
-    hint.style.color = 'var(--ok)';
+    fillSelectWithBadgesForType(sel, FREE_AUDIO_MODELS, PREMIUM_AUDIO_MODELS, 'grok-tts', 'aud', FREE_AUDIO_MODELS);
   }
+  updateTypeModelHint('audModel', 'audModelHint', FREE_AUDIO_MODELS, PREMIUM_AUDIO_MODELS, 'aud');
 }
 
 function updateVideoModelSelect(apiList) {
@@ -566,18 +569,16 @@ function updateVideoModelSelect(apiList) {
   if (state.apiKey) {
     const list = apiList || FALLBACK_VIDEO_MODELS;
     fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'seedance-2.0', 'vid', FREE_VIDEO_MODELS);
-    fillSelect(resSel, VIDEO_RES_PREMIUM, '1080p');
+    fillVideoResolutionSelect(resSel, VIDEO_RES_PREMIUM, '1080p');
     resHint.textContent = t('vid.resPremium');
-    resHint.style.color = 'var(--ok)';
-    modelHint.textContent = '';
+    resHint.style.color = 'var(--text-dim)';
   } else {
-    fillSelect(sel, FREE_VIDEO_MODELS, 'minimax-h3');
-    fillSelect(resSel, VIDEO_RES_FREE, '720p');
+    fillSelectWithBadgesForType(sel, FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'minimax-h3', 'vid', FREE_VIDEO_MODELS);
+    fillVideoResolutionSelect(resSel, VIDEO_RES_FREE, '720p');
     resHint.textContent = t('vid.resFree');
     resHint.style.color = '';
-    modelHint.textContent = t('vid.modelFree');
-    modelHint.style.color = 'var(--ok)';
   }
+  updateTypeModelHint('vidModel', 'vidModelHint', FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'vid');
 }
 
 function fillVideoResolutionSelect(sel, list, preferred) {
@@ -585,40 +586,27 @@ function fillVideoResolutionSelect(sel, list, preferred) {
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
-    const isPremium = PREMIUM_VIDEO_RESOLUTIONS.includes(name);
+    const isAnonymousResolution = VIDEO_RES_FREE.includes(name);
     opt.value = name;
-    opt.textContent = isPremium ? '🌟 ' + name : name;
-    if (!state.apiKey && isPremium) {
-      opt.disabled = true;
-      opt.textContent += ' 🔒';
-    }
+    opt.textContent = (isAnonymousResolution ? t('billing.anonResolution') : t('billing.paidParameter')) + ' · ' + name;
     sel.appendChild(opt);
   });
-  if (list.includes(current) && !(PREMIUM_VIDEO_RESOLUTIONS.includes(current) && !state.apiKey)) sel.value = current;
+  if (list.includes(current)) sel.value = current;
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
 function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix, freeList) {
+  const current = sel.value;
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
-    const isPremium = premiumList.includes(name);
-    const isFree = freeList && freeList.includes(name);
-    if (isPremium) {
-      opt.textContent = '🌟 ' + name;
-      if (!state.apiKey) {
-        opt.disabled = true;
-        opt.textContent += ' 🔒';
-      }
-    } else if (isFree) {
-      opt.textContent = '🆓 ' + name;
-    } else {
-      opt.textContent = name;
-    }
+    opt.textContent = billingLabel(name, freeList || [], premiumList);
+    if (!state.apiKey && premiumList.includes(name)) opt.disabled = true;
     sel.appendChild(opt);
   });
-  if (list.includes(preferred)) sel.value = preferred;
+  if (list.includes(current) && !(premiumList.includes(current) && !state.apiKey)) sel.value = current;
+  else if (list.includes(preferred)) sel.value = preferred;
 }
 
 // ---------- 图片生成 ----------
@@ -1448,28 +1436,9 @@ function bindEvents() {
   $('dlBtn').addEventListener('click', downloadImage);
   $('seedBtn').addEventListener('click', () => { $('imgSeed').value = randSeed(); });
   $('imgModel').addEventListener('change', () => updateModelHint());
-  $('txtModel').addEventListener('change', () => {
-    const h = $('txtModelHint'); if (!h) return;
-    const m = $('txtModel').value;
-    if (FREE_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelFree'); h.style.color = 'var(--ok)'; }
-    else if (!state.apiKey && PREMIUM_TEXT_MODELS.includes(m)) { h.textContent = t('txt.modelNeedKey'); h.style.color = 'var(--danger)'; }
-    else if (PREMIUM_TEXT_MODELS.includes(m) && state.apiKey) { h.textContent = t('txt.modelPremium'); h.style.color = 'var(--ok)'; }
-    else { h.textContent = ''; }
-  });
-  $('audModel').addEventListener('change', () => {
-    const h = $('audModelHint'); if (!h) return;
-    const m = $('audModel').value;
-    if (!state.apiKey && PREMIUM_AUDIO_MODELS.includes(m)) { h.textContent = t('aud.modelNeedKey'); h.style.color = 'var(--danger)'; }
-    else if (PREMIUM_AUDIO_MODELS.includes(m) && state.apiKey) { h.textContent = t('aud.modelPremium'); h.style.color = 'var(--ok)'; }
-    else { h.textContent = ''; }
-  });
-  $('vidModel').addEventListener('change', () => {
-    const h = $('vidModelHint'); if (!h) return;
-    const m = $('vidModel').value;
-    if (!state.apiKey && PREMIUM_VIDEO_MODELS.includes(m)) { h.textContent = t('vid.modelNeedKey'); h.style.color = 'var(--danger)'; }
-    else if (PREMIUM_VIDEO_MODELS.includes(m) && state.apiKey) { h.textContent = t('vid.modelPremium'); h.style.color = 'var(--ok)'; }
-    else { h.textContent = ''; }
-  });
+  $('txtModel').addEventListener('change', () => updateTypeModelHint('txtModel', 'txtModelHint', FREE_TEXT_MODELS, PREMIUM_TEXT_MODELS, 'txt'));
+  $('audModel').addEventListener('change', () => updateTypeModelHint('audModel', 'audModelHint', FREE_AUDIO_MODELS, PREMIUM_AUDIO_MODELS, 'aud'));
+  $('vidModel').addEventListener('change', () => updateTypeModelHint('vidModel', 'vidModelHint', FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'vid'));
 
   // 音频
   $('audBtn').addEventListener('click', () => generateAudio(false));
@@ -1487,7 +1456,13 @@ function bindEvents() {
   // 文本
   $('sendBtn').addEventListener('click', sendMessage);
   $('stopBtn').addEventListener('click', () => state.abort && state.abort.abort());
-  $('clearBtn').addEventListener('click', () => { state.messages = []; state.tokensUsed = 0; renderChat(); });
+  $('clearBtn').addEventListener('click', () => {
+    state.messages = [];
+    state.tokensUsed = 0;
+    state.stats.textTokens = 0;
+    updateBadge();
+    renderChat();
+  });
   $('txtTemp').addEventListener('input', e => { $('tempVal').textContent = e.target.value; });
 
   const ta = $('txtInput');
@@ -1594,6 +1569,10 @@ function bindEvents() {
     renderChat();
     renderHistory();
     updateBadge();
+    updateImageModelSelect();
+    updateTextModelSelect();
+    updateAudioModelSelect();
+    updateVideoModelSelect();
     updateNeedKeyVisibility();
     $('themeBtn').title = t(state.theme === 'dark' ? 'top.toLight' : 'top.toDark');
   });
