@@ -282,6 +282,12 @@ textarea { resize: vertical; line-height: 1.6; }
   font-weight: 700;
 }
 .usage-details { white-space: normal; }
+.usage-sync {
+  border-color: rgba(33, 181, 115, .3);
+  color: var(--ok);
+  font-size: 10.5px;
+  padding: 3px 6px;
+}
 :root[data-theme="light"] .usage-total { color: #9a6b00; }
 
 .badge {

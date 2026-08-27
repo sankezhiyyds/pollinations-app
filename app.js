@@ -280,6 +280,8 @@ function enterApp() {
   loadModels();
   renderHistory();
   setTimeout(() => assistant.say('ast.welcome'), 700);
+  // 每5分钟自动刷新模型列表
+  setInterval(loadModels, 5 * 60 * 1000);
 }
 
 function updateBadge() {
@@ -288,6 +290,7 @@ function updateBadge() {
   const balance = $('usageBalance');
   const total = $('usageTotal');
   const details = $('usageDetails');
+  const sync = $('modelSync');
   const textCost = state.stats.textTokens / state.creditRate;
   const totalCost = textCost + state.stats.imageCost + state.stats.audioCost + state.stats.videoCost;
 
@@ -306,6 +309,17 @@ function updateBadge() {
     audio: state.stats.audioCount,
     video: state.stats.videoCount
   });
+  if (sync) {
+    const lastSync = localStorage.getItem('pollinations_last_model_sync');
+    if (lastSync) {
+      const d = new Date(parseInt(lastSync));
+      const h = d.getHours().toString().padStart(2, '0');
+      const m = d.getMinutes().toString().padStart(2, '0');
+      sync.textContent = t('usage.modelSynced', { t: `${h}:${m}` });
+    } else {
+      sync.textContent = '';
+    }
+  }
 }
 
 function fmtTokens(n) {
@@ -359,6 +373,7 @@ async function loadModels() {
   updateVideoModelSelect();
 
   const timeout = (ms) => new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), ms));
+  let synced = false;
 
   try {
     // 匿名时新版端点会 401，用旧版端点查真实授权（匿名通常只返回 ["sana"]）
@@ -367,7 +382,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length) updateImageModelSelect(list);
+      if (list.length) { updateImageModelSelect(list); synced = true; }
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -376,7 +391,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length && state.apiKey) updateTextModelSelect(list);
+      if (list.length) { updateTextModelSelect(list); synced = true; }
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -385,7 +400,7 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length && state.apiKey) updateAudioModelSelect(list);
+      if (list.length) { updateAudioModelSelect(list); synced = true; }
     }
   } catch (e) { /* 静默回退 */ }
 
@@ -394,9 +409,14 @@ async function loadModels() {
     if (res.ok) {
       const data = await res.json();
       const list = normalizeModels(data);
-      if (list.length && state.apiKey) updateVideoModelSelect(list);
+      if (list.length) { updateVideoModelSelect(list); synced = true; }
     }
   } catch (e) { /* 静默回退 */ }
+
+  if (synced) {
+    localStorage.setItem('pollinations_last_model_sync', Date.now().toString());
+    updateBadge();
+  }
 }
 
 // 匿名档位服务端按「总像素面积」封顶在 589824 px（=768×768），
