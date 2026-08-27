@@ -30,7 +30,7 @@ const LOCALES = {
     'tier.key': '已登录',
     'tier.anon': '匿名',
     'tier.credits': '积分',
-    'tier.tokenHint': '每 1000 tokens（含输入与输出）约消耗 1 积分；具体计费以服务端账单为准',
+    'tier.tokenHint': '文本：约 1000 tokens ≈ 1 积分；图片/音频/视频按模型与参数独立计费。具体以服务端账单为准',
 
     'nav.image': '图片生成',
     'nav.text': '文本对话',
@@ -40,6 +40,9 @@ const LOCALES = {
     'nav.history': '历史记录',
 
     'need.key': '该功能需要 API Key，匿名模式不可用',
+    'cost.image': '⚠️ 除 flux 外，大部分图片模型需要消耗 Pollen 积分。🌟 标记的模型为付费模型',
+    'cost.audio': '⚠️ 语音合成需要消耗 Pollen 积分，所有模型均需付费',
+    'cost.video': '⚠️ 视频生成费用较高，按时长和分辨率计费，请确认后再生成',
 
     'aud.text': '要朗读的文本',
     'aud.textPh': '你好，欢迎使用 Pollinations Studio。来试试看吧！',
@@ -88,6 +91,7 @@ const LOCALES = {
     'img.negPromptPh': '模糊，低质量，变形，水印',
     'img.model': '模型',
     'img.modelHint': '🌟 标记的模型需要 Pollen 积分，画质更好',
+    'img.modelFree': '🆓 免费模型，无需积分',
     'img.modelPremium': '✨ 付费模型，画质更优',
     'img.modelNeedKey': '❌ 需要登录才能使用',
     'img.ratioFree': '匿名模式总像素上限约 768×768，已只列出能精确出图的尺寸',
@@ -217,7 +221,7 @@ const LOCALES = {
     'tier.key': 'Signed in',
     'tier.anon': 'Anonymous',
     'tier.credits': 'credits',
-    'tier.tokenHint': 'Every 1000 tokens (including input and output) ≈ 1 credit; actual billing is set by the service provider',
+    'tier.tokenHint': 'Text: ~1000 tokens ≈ 1 credit; image/audio/video are billed separately by model & params. Check your provider bill for details',
 
     'nav.image': 'Image',
     'nav.text': 'Chat',
@@ -227,6 +231,9 @@ const LOCALES = {
     'nav.history': 'History',
 
     'need.key': 'Requires API Key — not available in anonymous mode',
+    'cost.image': '⚠️ Most image models cost Pollen credits (except flux which is free). 🌟 models are paid',
+    'cost.audio': '⚠️ Speech synthesis costs Pollen credits — all models are paid',
+    'cost.video': '⚠️ Video generation is expensive — billed by duration & resolution. Confirm before generating',
 
     'aud.text': 'Text to read',
     'aud.textPh': 'Hello and welcome to Pollinations Studio! Give it a try.',
@@ -270,6 +277,7 @@ const LOCALES = {
     'img.negPromptPh': 'blurry, low quality, deformed, watermark',
     'img.model': 'Model',
     'img.modelHint': '🌟 models with badge require Pollen credits, better quality',
+    'img.modelFree': '🆓 Free model, no credits needed',
     'img.modelPremium': '✨ Premium model, better quality',
     'img.modelNeedKey': '❌ Sign in required',
     'img.ratioFree': 'Anonymous mode is capped at ~768×768 total pixels; only sizes that render exactly are listed',
@@ -404,7 +412,7 @@ const LOCALES = {
     'tier.key': 'ログイン中',
     'tier.anon': '匿名',
     'tier.credits': 'クレジット',
-    'tier.tokenHint': '入力と出力を含む 1000トークンあたり約 1クレジットです。実際の課金はサーバー側で決定されます',
+    'tier.tokenHint': 'テキスト：約1000トークン ≈ 1クレジット。画像/音声/動画はモデル別に課金されます。実際の課金はサーバー側で決定されます',
 
     'nav.image': '画像生成',
     'nav.text': 'チャット',
@@ -414,6 +422,9 @@ const LOCALES = {
     'nav.history': '履歴',
 
     'need.key': 'API キーが必要です。匿名モードでは使えません',
+    'cost.image': '⚠️ flux を除くほとんどの画像モデルは Pollen クレジットを消費します。🌟 マークは有料モデルです',
+    'cost.audio': '⚠️ 音声合成は Pollen クレジットを消費します。すべてのモデルが有料です',
+    'cost.video': '⚠️ 動画生成は高額です。長さと解像度で課金されます。確認してから生成してください',
 
     'aud.text': '読み上げるテキスト',
     'aud.textPh': 'こんにちは、Pollinations スタジオへようこそ！やってみてください',
@@ -457,6 +468,7 @@ const LOCALES = {
     'img.negPromptPh': 'ぼやけ、低品質、変形、ウォーターマーク',
     'img.model': 'モデル',
     'img.modelHint': '🌟 印は Pollen クレジットが必要、画質が向上',
+    'img.modelFree': '🆓 フリーモデル、クレジット不要',
     'img.modelPremium': '✨ プレミアムモデル、高品質',
     'img.modelNeedKey': '❌ ログインが必要です',
     'img.ratioFree': '匿名モードは合計約 768×768 ピクセルが上限のため、正確に出力できるサイズのみ表示しています',

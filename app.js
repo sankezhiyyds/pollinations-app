@@ -29,10 +29,10 @@ const STORE = {
 };
 
 const FALLBACK_IMAGE_MODELS = ['flux', 'turbo', 'kontext', 'gptimage', 'seedream'];
-// 匿名档位服务端实际只授权 sana（image.pollinations.ai/models 返回 ["sana"]）；
-// 请求 flux / turbo 不会报错，而是被静默替换成 sana，所以免费列表只列 sana
-const FREE_IMAGE_MODELS = ['sana'];
-const PREMIUM_IMAGE_MODELS = ['kontext', 'gptimage', 'seedream', 'klein', 'gptimage-large', 'gpt-image-2', 'nova-canvas', 'dreamshaper', 'zimage'];
+// flux 是唯一真正免费的图片模型；sana 也是免费（匿名档位的默认模型）
+const FREE_IMAGE_MODELS = ['flux', 'sana'];
+// turbo 实际收费 0.002🌸/img；klein/gptimage-large/gpt-image-2/nova-canvas/dreamshaper/zimage 也均需付费
+const PREMIUM_IMAGE_MODELS = ['kontext', 'gptimage', 'seedream', 'klein', 'gptimage-large', 'gpt-image-2', 'nova-canvas', 'dreamshaper', 'zimage', 'turbo'];
 const FALLBACK_TEXT_MODELS = ['openai', 'openai-fast', 'openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
 const FREE_TEXT_MODELS = ['openai', 'openai-fast'];
 const PREMIUM_TEXT_MODELS = ['openai-large', 'openai-reasoning', 'mistral', 'searchgpt'];
@@ -448,7 +448,7 @@ function fillSelect(sel, list, preferred) {
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
-// 带模型标签的填充：为 premium 模型添加 🌟 前缀，未登录时禁用付费模型
+// 带模型标签的填充：免费模型加 🆓，付费模型加 🌟；未登录时禁用付费模型
 function fillSelectWithBadges(sel, list, preferred) {
   const current = sel.value;
   sel.innerHTML = '';
@@ -456,10 +456,17 @@ function fillSelectWithBadges(sel, list, preferred) {
     const opt = document.createElement('option');
     opt.value = name;
     const isPremium = PREMIUM_IMAGE_MODELS.includes(name);
-    opt.textContent = isPremium ? '🌟 ' + name : name;
-    if (!state.apiKey && isPremium) {
-      opt.disabled = true;
-      opt.textContent += ' 🔒';
+    const isFree = FREE_IMAGE_MODELS.includes(name);
+    if (isPremium) {
+      opt.textContent = '🌟 ' + name;
+      if (!state.apiKey) {
+        opt.disabled = true;
+        opt.textContent += ' 🔒';
+      }
+    } else if (isFree) {
+      opt.textContent = '🆓 ' + name;
+    } else {
+      opt.textContent = name;
     }
     sel.appendChild(opt);
   });
@@ -471,7 +478,10 @@ function updateModelHint() {
   const model = $('imgModel').value;
   const hint = $('modelHint');
   if (!hint) return;
-  if (!state.apiKey && PREMIUM_IMAGE_MODELS.includes(model)) {
+  if (FREE_IMAGE_MODELS.includes(model)) {
+    hint.textContent = t('img.modelFree');
+    hint.style.color = 'var(--ok)';
+  } else if (!state.apiKey && PREMIUM_IMAGE_MODELS.includes(model)) {
     hint.textContent = t('img.modelNeedKey');
     hint.style.color = 'var(--danger)';
   } else if (PREMIUM_IMAGE_MODELS.includes(model) && state.apiKey) {
@@ -553,10 +563,14 @@ function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix) 
     const opt = document.createElement('option');
     opt.value = name;
     const isPremium = premiumList.includes(name);
-    opt.textContent = isPremium ? '🌟 ' + name : name;
-    if (!state.apiKey && isPremium) {
-      opt.disabled = true;
-      opt.textContent += ' 🔒';
+    if (isPremium) {
+      opt.textContent = '🌟 ' + name;
+      if (!state.apiKey) {
+        opt.disabled = true;
+        opt.textContent += ' 🔒';
+      }
+    } else {
+      opt.textContent = name;
     }
     sel.appendChild(opt);
   });
@@ -942,9 +956,14 @@ async function generateVideo(reuse) {
 // ---------- 音频/视频的 Key 可见性 ----------
 
 function updateNeedKeyVisibility() {
-  const visible = !state.apiKey;
-  $('audioNeedKey').classList.toggle('hidden', !visible);
-  $('videoNeedKey').classList.toggle('hidden', !visible);
+  const hasKey = !!state.apiKey;
+  // 匿名模式：显示"需要 Key"提示；已登录：隐藏
+  $('audioNeedKey').classList.toggle('hidden', !(!hasKey));
+  $('videoNeedKey').classList.toggle('hidden', !(!hasKey));
+  // 已登录：显示费用警告（图片/音频/视频均需付费，除 flux 外）
+  $('imgCostWarn').classList.toggle('hidden', !hasKey);
+  $('audCostWarn').classList.toggle('hidden', !hasKey);
+  $('vidCostWarn').classList.toggle('hidden', !hasKey);
 }
 
 // data URL 转 Blob，用于 multipart 上传

@@ -265,6 +265,28 @@ textarea { resize: vertical; line-height: 1.6; }
 .badge.green { background: rgba(33, 181, 115, .14); color: var(--ok); }
 .badge.gray { background: var(--surface-2); color: var(--text-dim); }
 
+.needkey {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 107, 133, .1);
+  border: 1px solid rgba(255, 107, 133, .3);
+  color: var(--danger);
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+.cost-warn {
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: rgba(255, 193, 7, .08);
+  border: 1px solid rgba(255, 193, 7, .25);
+  color: #e6a817;
+  font-size: 13px;
+  margin-bottom: 12px;
+  line-height: 1.5;
+}
+:root[data-theme="light"] .cost-warn { color: #b8860b; }
+
 .tabs {
   display: flex;
   gap: 4px;
