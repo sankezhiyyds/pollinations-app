@@ -966,11 +966,7 @@ function updateNeedKeyVisibility() {
   // 匿名模式：显示"需要 Key"提示；已登录：隐藏
   $('audioNeedKey').classList.toggle('hidden', !(!hasKey));
   $('videoNeedKey').classList.toggle('hidden', !(!hasKey));
-  // 已登录：显示费用警告（图片/音频/视频/文本均需付费，除免费模型外）
-  $('imgCostWarn').classList.toggle('hidden', !hasKey);
-  $('audCostWarn').classList.toggle('hidden', !hasKey);
-  $('vidCostWarn').classList.toggle('hidden', !hasKey);
-  $('txtCostWarn').classList.toggle('hidden', !hasKey);
+  // 费用警告始终显示，不再根据登录状态隐藏
 }
 
 // data URL 转 Blob，用于 multipart 上传

@@ -99,7 +99,7 @@
         </div>
 
         <button id="imgBtn" class="btn primary block" data-i18n="img.generate">生成图片</button>
-        <div id="imgCostWarn" class="cost-warn hidden" data-i18n="cost.image">⚠️ 除 flux 外，大部分图片模型需要消耗 Pollen 积分。🌟 标记的模型为付费模型</div>
+        <div id="imgCostWarn" class="cost-warn" data-i18n="cost.image">⚠️ 除 flux 外，大部分图片模型需要消耗 Pollen 积分。🌟 标记的模型为付费模型</div>
         <p id="imgHint" class="hint"></p>
       </div>
 
@@ -117,7 +117,7 @@
 
     <section id="panel-text" class="panel">
       <div class="chat-setting">
-        <div id="txtCostWarn" class="cost-warn hidden" data-i18n="cost.text">⚠️ 文本对话按 token 计费，大部分模型需消耗积分（openai/openai-fast 免费）。具体以服务端账单为准</div>
+        <div id="txtCostWarn" class="cost-warn" data-i18n="cost.text">⚠️ 文本对话按 token 计费，大部分模型需消耗积分（openai/openai-fast 免费）。具体以服务端账单为准</div>
         <div class="row">
           <div class="grow">
             <label class="lbl" data-i18n="txt.model">模型</label>
@@ -151,7 +151,7 @@
     <section id="panel-audio" class="panel">
       <div class="col-form">
         <div id="audioNeedKey" class="needkey hidden" data-i18n="need.key">该功能需要 API Key，匿名模式不可用</div>
-        <div id="audCostWarn" class="cost-warn hidden" data-i18n="cost.audio">⚠️ 语音合成需要消耗 Pollen 积分，所有模型均需付费</div>
+        <div id="audCostWarn" class="cost-warn" data-i18n="cost.audio">⚠️ 语音合成需要消耗 Pollen 积分，所有模型均需付费</div>
 
         <label class="lbl" data-i18n="aud.text">要朗读的文本</label>
         <textarea id="audText" rows="5" data-i18n-ph="aud.textPh"
@@ -205,7 +205,7 @@
     <section id="panel-video" class="panel">
       <div class="col-form">
         <div id="videoNeedKey" class="needkey hidden" data-i18n="need.key">该功能需要 API Key，匿名模式不可用</div>
-        <div id="vidCostWarn" class="cost-warn hidden" data-i18n="cost.video">⚠️ 视频生成费用较高，按时长和分辨率计费，请确认后再生成</div>
+        <div id="vidCostWarn" class="cost-warn" data-i18n="cost.video">⚠️ 视频生成费用较高，按时长和分辨率计费，请确认后再生成</div>
 
         <label class="lbl" data-i18n="vid.prompt">提示词</label>
         <textarea id="vidPrompt" rows="4" data-i18n-ph="vid.promptPh"
