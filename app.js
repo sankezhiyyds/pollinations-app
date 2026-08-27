@@ -505,16 +505,18 @@ function updateTextModelSelect(apiList) {
   }
 }
 
+// 音频
 function updateAudioModelSelect(apiList) {
   const sel = $('audModel');
   const hint = $('audModelHint');
   if (state.apiKey) {
     const list = apiList || FALLBACK_AUDIO_MODELS;
-    fillSelectWithBadgesForType(sel, list, PREMIUM_AUDIO_MODELS, 'elevenlabs', 'aud');
+    fillSelectWithBadgesForType(sel, list, PREMIUM_AUDIO_MODELS, 'elevenlabs', 'aud', FREE_AUDIO_MODELS);
     hint.textContent = '';
   } else {
     fillSelect(sel, FREE_AUDIO_MODELS, 'grok-tts');
-    hint.textContent = '';
+    hint.textContent = t('aud.modelFree');
+    hint.style.color = 'var(--ok)';
   }
 }
 
@@ -525,7 +527,7 @@ function updateVideoModelSelect(apiList) {
   const resHint = $('vidResHint');
   if (state.apiKey) {
     const list = apiList || FALLBACK_VIDEO_MODELS;
-    fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'seedance-2.0', 'vid');
+    fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'seedance-2.0', 'vid', FREE_VIDEO_MODELS);
     fillSelect(resSel, VIDEO_RES_PREMIUM, '1080p');
     resHint.textContent = t('vid.resPremium');
     resHint.style.color = 'var(--ok)';
@@ -535,7 +537,8 @@ function updateVideoModelSelect(apiList) {
     fillSelect(resSel, VIDEO_RES_FREE, '720p');
     resHint.textContent = t('vid.resFree');
     resHint.style.color = '';
-    modelHint.textContent = '';
+    modelHint.textContent = t('vid.modelFree');
+    modelHint.style.color = 'var(--ok)';
   }
 }
 
