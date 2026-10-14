@@ -896,7 +896,7 @@ async function generateImage(reuseSeed) {
       got = await loadImageFromEdit(prompt, imgEditImageData, opts);
     } else if (state.apiKey) {
       const apiUrl = buildImageUrl(prompt, opts);
-      got = await loadImage(apiUrl);
+      got = await loadImageViaFetch(apiUrl);
       got.apiUrl = apiUrl;
     } else {
       const apiUrl = legacy;
@@ -935,15 +935,18 @@ async function generateImage(reuseSeed) {
     $('imgBtn').disabled = false;
     $('imgBtn').textContent = t('img.generate');
   } catch (e) {
-    // 图生图走 fetch，能拿到真实错误信息；文生图走 <img>，拿不到状态码
+    // 图生图与登录后的文生图都走 fetch，能拿到状态码；匿名文生图走 <img>，拿不到
     let msg;
     if (e && e.timeout) {
       msg = t('img.timeout');
+    } else if (e && e.status === 401) {
+      msg = isEditMode ? t('img.editNeedKey') : t('img.needKey');
+    } else if (e && e.status === 402) {
+      msg = t('img.noBalance');
+    } else if (e && e.status) {
+      msg = t('img.fail') + '（' + e.message + '）';
     } else if (isEditMode) {
-      msg = e && e.status === 401 ? t('img.editNeedKey')
-          : e && e.status === 402 ? t('img.noBalance')
-          : (e && e.message) ? t('img.fail') + '（' + e.message + '）'
-          : t('img.fail');
+      msg = (e && e.message) ? t('img.fail') + '（' + e.message + '）' : t('img.fail');
     } else {
       msg = state.apiKey ? t('img.fail') : t('img.rate');
     }
@@ -1013,7 +1016,17 @@ async function generateAudio(reuse) {
       throw new Error('no-key');
     }
     const resp = await fetch(url, { signal: state.abort.signal });
-    if (!resp.ok) throw new Error('http ' + resp.status);
+    if (!resp.ok) {
+      // 透出服务端真实报错，便于区分 Key 无效(401)/余额不足(402)等问题
+      let detail = 'HTTP ' + resp.status;
+      try {
+        const err = await resp.json();
+        if (err && err.error && err.error.message) detail = err.error.message;
+      } catch (_) {}
+      const e = new Error(detail);
+      e.status = resp.status;
+      throw e;
+    }
     const blob = await resp.blob();
     const local = URL.createObjectURL(blob);
     $('audStage').innerHTML =
@@ -1028,8 +1041,14 @@ async function generateAudio(reuse) {
     pushHistory({ type: 'audio', prompt: text, model, seed: null, size: format, url: local, at: Date.now() });
     reportSpend('audio');
   } catch (e) {
-    const msg = e.message === 'no-key' ? t('need.key') : (state.apiKey ? t('aud.fail') : t('aud.rate'));
-    $('audStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    // 优先给出服务端真实原因：401=Key 无效，402=余额不足，其余带上原始 message
+    let msg;
+    if (e && e.message === 'no-key') msg = t('need.key');
+    else if (e && e.status === 401) msg = t('aud.needKey');
+    else if (e && e.status === 402) msg = t('aud.noBalance');
+    else if (e && e.status) msg = t('aud.fail') + '（' + e.message + '）';
+    else msg = state.apiKey ? t('aud.fail') : t('aud.rate');
+    $('audStage').innerHTML = '<div class="stage-empty">' + escapeHtml(msg) + '</div>';
     $('audHint').textContent = msg;
     assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
   } finally {
@@ -1235,6 +1254,27 @@ function loadImage(url, timeoutMs = 90000) {
   });
 }
 
+// 登录后的文生图改走 fetch：<img> 拿不到 HTTP 状态码，无法区分 401/402 等问题
+// 官方图片端点支持 ?key= 传认证，这里不额外加请求头，避免触发 CORS 预检
+async function loadImageViaFetch(url) {
+  const res = await fetch(url);
+  if (!res.ok) {
+    let detail = 'HTTP ' + res.status;
+    try {
+      const err = await res.json();
+      if (err && err.error && err.error.message) detail = err.error.message;
+    } catch (_) {}
+    const e = new Error(detail);
+    e.status = res.status;
+    throw e;
+  }
+  const blob = await res.blob();
+  const objUrl = URL.createObjectURL(blob);
+  const got = await loadImage(objUrl);
+  got.blobUrl = objUrl;
+  return got;
+}
+
 async function downloadImage() {
   if (!state.lastImage) return;
   try {
@@ -1353,7 +1393,11 @@ async function sendMessage() {
     if (signal.aborted) {
       state.messages.splice(idx, 1);
     } else {
-      state.messages[idx].content = result.status === 'ratelimit' ? t('txt.rate') : (result.status === 'unauth' ? t('txt.unauth') : t('txt.fail'));
+      state.messages[idx].content =
+        result.status === 'ratelimit' ? t('txt.rate')
+        : result.status === 'unauth' ? t('txt.unauth')
+        : result.status === 'nobalance' ? t('txt.noBalance')
+        : (result.detail ? t('txt.fail') + '（' + result.detail + '）' : t('txt.fail'));
       assistant.say(result.status === 'ratelimit' ? 'ast.rate' : 'ast.imgFail');
     }
   } else {
@@ -1414,7 +1458,16 @@ async function streamChat(endpoint, payload, idx) {
       } catch (e) { /* ignore */ }
       return { status: 'ratelimit', usage: usageTokens };
     }
-    if (!res.ok || !res.body) return { status: false, usage: usageTokens };
+    if (!res.ok || !res.body) {
+      // 透出服务端真实报错：402 归为余额不足，其余带上原文 message
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = (body && (body.error && body.error.message || body.message)) || '';
+      } catch (e) { /* 非 JSON 响应 */ }
+      if (res.status === 402) return { status: 'nobalance', usage: usageTokens, detail };
+      return { status: false, usage: usageTokens, detail };
+    }
 
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
