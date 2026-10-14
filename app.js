@@ -69,6 +69,8 @@ const PREMIUM_VIDEO_MODELS = FALLBACK_VIDEO_MODELS.slice();
 const VIDEO_RES_FREE = ['480p', '720p'];
 // 兜底分辨率；同步到具体模型后会按该模型的 resolutions 自动收敛
 const VIDEO_RES_PREMIUM = ['480p', '720p', '1080p', '2k', '4k'];
+// 多数视频模型的画面比例；具体模型的支持范围见 videoAspectRatiosFor()
+const VIDEO_RATIO_COMMON = ['16:9', '9:16'];
 
 const state = {
   apiKey: '',
@@ -673,6 +675,9 @@ function applyVideoByModel(modelName) {
   const preferredRes = state.apiKey ? (res.includes('1080p') ? '1080p' : res[res.length - 1]) : '720p';
   fillVideoResolutionSelect($('vidRes'), res, preferredRes);
 
+  // 画面比例按模型支持范围自动匹配
+  fillVideoRatioSelect($('vidRatio'), videoAspectRatiosFor(modelName), '16:9');
+
   const dur = $('vidDur');
   const mn = meta && meta.minDuration != null ? meta.minDuration : 2;
   const mx = meta && meta.maxDuration != null ? meta.maxDuration : 10;
@@ -696,6 +701,32 @@ function fillVideoResolutionSelect(sel, list, preferred) {
   });
   if (list.includes(current)) sel.value = current;
   else if (list.includes(preferred)) sel.value = preferred;
+}
+
+// 各视频模型支持的画面比例（接口未返回该字段，依据官方文档）
+//   - 多数模型：16:9 / 9:16
+//   - minimax-h3：仅 16:9
+//   - minimax-h3-max、minimax-h3-max-turbo：另支持 21:9、4:3、1:1、3:4
+function videoAspectRatiosFor(modelName) {
+  if (modelName === 'minimax/minimax-h3') return ['16:9'];
+  if (modelName === 'minimax/minimax-h3-max' || modelName === 'minimax/minimax-h3-max-turbo') {
+    return ['16:9', '9:16', '21:9', '4:3', '1:1', '3:4'];
+  }
+  return VIDEO_RATIO_COMMON.slice();
+}
+
+function fillVideoRatioSelect(sel, list, preferred) {
+  const current = sel.value;
+  sel.innerHTML = '';
+  list.forEach(name => {
+    const opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (list.includes(current)) sel.value = current;
+  else if (list.includes(preferred)) sel.value = preferred;
+  else sel.value = list[0] || '';
 }
 
 function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix, freeList) {
