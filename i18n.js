@@ -101,6 +101,8 @@ const LOCALES = {
     'vid.done': '视频生成完成',
     'vid.fail': '生成失败,换个提示词或检查 Key 额度',
     'vid.rate': '请求太频繁了,视频很慢,等一会儿再来',
+    'vid.needKey': '需要有效的 API Key，请重新登录',
+    'vid.noBalance': '余额不足：视频模型需付费 Pollen',
 
     'ast.firstAudio': '试试生成一段语音,可以当播客片头用',
     'ast.firstVideo': 'AI 做视频挺酷,输入简短描述就行',
@@ -318,6 +320,8 @@ const LOCALES = {
     'vid.done': 'Done',
     'vid.fail': 'Failed, retry with another prompt or check your balance',
     'vid.rate': 'Too many requests. Videos are slow — wait a moment.',
+    'vid.needKey': 'A valid API key is required — please sign in again',
+    'vid.noBalance': 'Insufficient balance — video models require paid Pollen',
 
     'img.prompt': 'Prompt',
     'img.promptPh': 'A shiba inu wearing an astronaut helmet, cyberpunk neon street',
@@ -535,6 +539,8 @@ const LOCALES = {
     'vid.done': '完了',
     'vid.fail': '失敗しました。別のプロンプトで再試行するか、残高を確認してください',
     'vid.rate': 'リクエストが多すぎます。動画は特に時間がかかるので、しばらく待ってください',
+    'vid.needKey': '有効なAPIキーが必要です。再度ログインしてください',
+    'vid.noBalance': '残高不足：動画モデルには有料Pollenが必要です',
 
     'img.prompt': 'プロンプト',
     'img.promptPh': '宇宙ヘルメットをかぶった柴犬、サイバーパンクのネオン街',

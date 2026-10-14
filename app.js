@@ -1090,7 +1090,17 @@ async function generateVideo(reuse) {
 
   try {
     const resp = await fetch(url, { signal: state.abort.signal, headers: authHeaders() });
-    if (!resp.ok) throw new Error('http ' + resp.status);
+    if (!resp.ok) {
+      // 透出服务端真实报错，便于区分 Key 无效(401)/余额不足(402)等问题
+      let detail = 'HTTP ' + resp.status;
+      try {
+        const err = await resp.json();
+        if (err && err.error && err.error.message) detail = err.error.message;
+      } catch (_) {}
+      const e = new Error(detail);
+      e.status = resp.status;
+      throw e;
+    }
     const blob = await resp.blob();
     const local = URL.createObjectURL(blob);
     $('vidStage').innerHTML =
@@ -1104,8 +1114,13 @@ async function generateVideo(reuse) {
     pushHistory({ type: 'video', prompt, model, seed, size: resolution, url: local, at: Date.now() });
     reportSpend('video');
   } catch (e) {
-    const msg = state.apiKey ? t('vid.fail') : t('vid.rate');
-    $('vidStage').innerHTML = '<div class="stage-empty">' + msg + '</div>';
+    // 优先给出服务端真实原因：401=Key 无效/未登录，402=余额不足，其余带上原始 message
+    let msg;
+    if (e && e.status === 401) msg = t('vid.needKey');
+    else if (e && e.status === 402) msg = t('vid.noBalance');
+    else if (e && e.status) msg = t('vid.fail') + '（' + e.message + '）';
+    else msg = state.apiKey ? t('vid.fail') : t('vid.rate');
+    $('vidStage').innerHTML = '<div class="stage-empty">' + escapeHtml(msg) + '</div>';
     $('vidHint').textContent = msg;
     assistant.say(state.apiKey ? 'ast.imgFail' : 'ast.rate');
     let remaining = state.apiKey ? 10 : 15;
