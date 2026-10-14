@@ -39,12 +39,36 @@ const PREMIUM_TEXT_MODELS = ['openai-large', 'openai-reasoning', 'mistral', 'sea
 const FALLBACK_AUDIO_MODELS = ['grok-tts', 'qwen-tts', 'elevenlabs', 'elevenflash', 'kokoro', 'fish-audio-s2.1-pro'];
 const FREE_AUDIO_MODELS = ['grok-tts', 'qwen-tts'];
 const PREMIUM_AUDIO_MODELS = ['elevenlabs', 'elevenflash', 'kokoro', 'fish-audio-s2.1-pro'];
-const FALLBACK_VIDEO_MODELS = ['minimax-h3', 'seedance-2.0', 'veo', 'wan', 'wan-fast', 'wan-pro', 'nova-reel'];
-const FREE_VIDEO_MODELS = ['minimax-h3'];
-const PREMIUM_VIDEO_MODELS = ['seedance-2.0', 'veo', 'wan', 'wan-fast', 'wan-pro', 'nova-reel'];
-const FALLBACK_VIDEO_RESOLUTIONS = ['480p', '720p', '1k', '1080p', '2k', '4k'];
+// 视频模型目录：首次进入或同步失败时的兜底清单；同步成功后会以 /video/models 返回为准（自动更新）
+const FALLBACK_VIDEO_MODELS = [
+  'minimax/minimax-h3',
+  'minimax/minimax-h3-max',
+  'minimax/minimax-h3-max-turbo',
+  'bytedance/seedance-2.0',
+  'bytedance/seedance-2.0-fast',
+  'bytedance/seedance-2.0-mini',
+  'bytedance/seedance-2.5',
+  'bytedance/seedance-1-pro-fast',
+  'alibaba/wan-2.2-fast',
+  'alibaba/wan-2.6',
+  'alibaba/wan-2.7',
+  'alibaba/wan-3.0',
+  'alibaba/happyhorse-1.1',
+  'google/veo-3.1-fast',
+  'google/gemini-omni-1.1-flash',
+  'x-ai/grok-imagine-video',
+  'x-ai/grok-imagine-video-1.5',
+  'x-ai/grok-imagine-video-1.5-lite',
+  'kandinskylab/kandinsky-6.0-lite',
+  'heygen/heygen-video-1',
+  'prunaai/p-video'
+];
+// 视频模型目前全部为「按量付费」（接口 paid_only 均为 true），没有免费模型
+const FREE_VIDEO_MODELS = [];
+const PREMIUM_VIDEO_MODELS = FALLBACK_VIDEO_MODELS.slice();
 const VIDEO_RES_FREE = ['480p', '720p'];
-const VIDEO_RES_PREMIUM = ['480p', '720p', '1k', '1080p', '2k', '4k'];
+// 兜底分辨率；同步到具体模型后会按该模型的 resolutions 自动收敛
+const VIDEO_RES_PREMIUM = ['480p', '720p', '1080p', '2k', '4k'];
 
 const state = {
   apiKey: '',
@@ -59,6 +83,8 @@ const state = {
   generating: false,
   tokensUsed: 0,
   creditRate: 1000, // 1000 tokens ≈ 1 credit
+  // 各类型模型的接口元数据缓存：name -> { paidOnly, resolutions, minDuration, maxDuration, defaultDuration }（同步后自动更新）
+  modelMeta: {},
   // 消耗统计（按类型）
   stats: {
     textTokens: 0,   // 文本对话 token 数
@@ -381,6 +407,7 @@ async function loadModels() {
     const res = await Promise.race([fetch(modelsUrl, { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
+      indexModelMeta('image', data);
       const list = normalizeModels(data);
       if (list.length) { updateImageModelSelect(list); synced = true; }
     }
@@ -390,6 +417,7 @@ async function loadModels() {
     const res = await Promise.race([fetch(API.base + '/v1/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
+      indexModelMeta('text', data);
       const list = normalizeModels(data);
       if (list.length) { updateTextModelSelect(list); synced = true; }
     }
@@ -399,6 +427,7 @@ async function loadModels() {
     const res = await Promise.race([fetch(API.base + '/audio/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
+      indexModelMeta('audio', data);
       const list = normalizeModels(data);
       if (list.length) { updateAudioModelSelect(list); synced = true; }
     }
@@ -408,6 +437,7 @@ async function loadModels() {
     const res = await Promise.race([fetch(API.base + '/video/models', { headers: authHeaders() }), timeout(5000)]);
     if (res.ok) {
       const data = await res.json();
+      indexModelMeta('video', data);
       const list = normalizeModels(data);
       if (list.length) { updateVideoModelSelect(list); synced = true; }
     }
@@ -448,11 +478,12 @@ function updateImageModelSelect(apiList) {
   updateModelHint();
 }
 
-function billingLabel(name, freeList, premiumList) {
-  if (freeList.includes(name)) return t('billing.free') + ' · ' + name;
-  if (premiumList.includes(name)) return state.apiKey
-    ? t('billing.paid') + ' · ' + name
-    : t('billing.keyRequired') + ' · ' + name;
+function billingLabel(name, freeList, premiumList, type) {
+  const kind = classifyModel(name, freeList, premiumList, type);
+  if (kind === 'free') return t('billing.free') + ' · ' + name;
+  if (kind === 'paid') {
+    return (state.apiKey ? t('billing.paid') : t('billing.keyRequired')) + ' · ' + name;
+  }
   return t('billing.serverPrice') + ' · ' + name;
 }
 
@@ -496,6 +527,43 @@ function normalizeModels(data) {
     .filter(Boolean);
 }
 
+// 前缀 -> 模型类型，用于按类型读取接口元数据
+const TYPE_BY_PREFIX = { txt: 'text', aud: 'audio', vid: 'video' };
+
+// 把接口返回的模型对象建成 name -> 元数据 索引，供免费/付费标记、分辨率、时长自动更新
+function indexModelMeta(type, data) {
+  let arr = Array.isArray(data) ? data : (data && Array.isArray(data.data) ? data.data : []);
+  const map = new Map();
+  arr.forEach(m => {
+    if (!m || typeof m !== 'object') return;
+    const name = m.id || m.name || m.model;
+    if (!name) return;
+    map.set(name, {
+      paidOnly: !!m.paid_only,
+      resolutions: Array.isArray(m.resolutions) ? m.resolutions.slice() : [],
+      minDuration: typeof m.min_duration === 'number' ? m.min_duration : null,
+      maxDuration: typeof m.max_duration === 'number' ? m.max_duration : null,
+      defaultDuration: typeof m.default_duration === 'number' ? m.default_duration : null
+    });
+  });
+  if (map.size) state.modelMeta[type] = map;
+}
+
+function modelMetaOf(type, name) {
+  const map = state.modelMeta[type];
+  return map ? map.get(name) || null : null;
+}
+
+// 判断是否免费 / 是否按量付费：优先用接口 paid_only，缺失时回退到预置列表
+function classifyModel(name, freeList, premiumList, type) {
+  const meta = type ? modelMetaOf(type, name) : null;
+  if (meta) return meta.paidOnly ? 'paid' : 'free';
+  if ((freeList || []).includes(name)) return 'free';
+  if ((premiumList || []).includes(name)) return 'paid';
+  return 'unknown';
+}
+
+
 function fillSelect(sel, list, preferred) {
   const current = sel.value;
   sel.innerHTML = '';
@@ -515,11 +583,11 @@ function fillSelectWithBadges(sel, list, preferred) {
   list.forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = billingLabel(name, FREE_IMAGE_MODELS, PREMIUM_IMAGE_MODELS);
-    if (!state.apiKey && PREMIUM_IMAGE_MODELS.includes(name)) opt.disabled = true;
+    opt.textContent = billingLabel(name, FREE_IMAGE_MODELS, PREMIUM_IMAGE_MODELS, 'image');
+    if (!state.apiKey && classifyModel(name, FREE_IMAGE_MODELS, PREMIUM_IMAGE_MODELS, 'image') === 'paid') opt.disabled = true;
     sel.appendChild(opt);
   });
-  if (list.includes(current) && !(PREMIUM_IMAGE_MODELS.includes(current) && !state.apiKey)) sel.value = current;
+  if (list.includes(current) && !(classifyModel(current, FREE_IMAGE_MODELS, PREMIUM_IMAGE_MODELS, 'image') === 'paid' && !state.apiKey)) sel.value = current;
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
@@ -546,10 +614,11 @@ function updateTypeModelHint(selectId, hintId, freeList, premiumList, prefix) {
   const model = $(selectId).value;
   const hint = $(hintId);
   if (!hint) return;
-  if (freeList.includes(model)) {
+  const kind = classifyModel(model, freeList, premiumList, TYPE_BY_PREFIX[prefix]);
+  if (kind === 'free') {
     hint.textContent = t(prefix + '.modelFree');
     hint.style.color = 'var(--ok)';
-  } else if (premiumList.includes(model)) {
+  } else if (kind === 'paid') {
     hint.textContent = state.apiKey ? t(prefix + '.modelPremium') : t(prefix + '.modelNeedKey');
     hint.style.color = state.apiKey ? 'var(--text-dim)' : 'var(--danger)';
   } else {
@@ -583,22 +652,36 @@ function updateAudioModelSelect(apiList) {
 
 function updateVideoModelSelect(apiList) {
   const sel = $('vidModel');
-  const resSel = $('vidRes');
-  const modelHint = $('vidModelHint');
+  // 有同步结果就用接口返回的完整目录；否则用兜底清单。匿名同样展示全目录（按量付费项会被禁用）
+  const list = (apiList && apiList.length) ? apiList : FALLBACK_VIDEO_MODELS;
+  fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'bytedance/seedance-2.0', 'vid', FREE_VIDEO_MODELS);
+  applyVideoByModel(sel.value);
   const resHint = $('vidResHint');
-  if (state.apiKey) {
-    const list = apiList || FALLBACK_VIDEO_MODELS;
-    fillSelectWithBadgesForType(sel, list, PREMIUM_VIDEO_MODELS, 'seedance-2.0', 'vid', FREE_VIDEO_MODELS);
-    fillVideoResolutionSelect(resSel, VIDEO_RES_PREMIUM, '1080p');
-    resHint.textContent = t('vid.resPremium');
-    resHint.style.color = 'var(--text-dim)';
-  } else {
-    fillSelectWithBadgesForType(sel, FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'minimax-h3', 'vid', FREE_VIDEO_MODELS);
-    fillVideoResolutionSelect(resSel, VIDEO_RES_FREE, '720p');
-    resHint.textContent = t('vid.resFree');
-    resHint.style.color = '';
-  }
+  resHint.textContent = state.apiKey ? t('vid.resPremium') : t('vid.resFree');
+  resHint.style.color = state.apiKey ? 'var(--text-dim)' : '';
   updateTypeModelHint('vidModel', 'vidModelHint', FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'vid');
+}
+
+// 分辨率与时长按所选模型的接口数据自动收敛（模型更新后无需改代码）
+function applyVideoByModel(modelName) {
+  const meta = modelMetaOf('video', modelName);
+  let res = meta && meta.resolutions.length ? meta.resolutions.slice() : VIDEO_RES_PREMIUM.slice();
+  if (!state.apiKey) {
+    const subset = res.filter(r => VIDEO_RES_FREE.includes(r));
+    res = subset.length ? subset : VIDEO_RES_FREE.slice();
+  }
+  const preferredRes = state.apiKey ? (res.includes('1080p') ? '1080p' : res[res.length - 1]) : '720p';
+  fillVideoResolutionSelect($('vidRes'), res, preferredRes);
+
+  const dur = $('vidDur');
+  const mn = meta && meta.minDuration != null ? meta.minDuration : 2;
+  const mx = meta && meta.maxDuration != null ? meta.maxDuration : 10;
+  dur.min = mn;
+  dur.max = mx;
+  let val = meta && meta.defaultDuration != null ? meta.defaultDuration : Number(dur.value);
+  val = Math.min(Math.max(val, mn), mx);
+  dur.value = val;
+  $('vidDurVal').textContent = val;
 }
 
 function fillVideoResolutionSelect(sel, list, preferred) {
@@ -617,15 +700,16 @@ function fillVideoResolutionSelect(sel, list, preferred) {
 
 function fillSelectWithBadgesForType(sel, list, premiumList, preferred, prefix, freeList) {
   const current = sel.value;
+  const type = TYPE_BY_PREFIX[prefix];
   sel.innerHTML = '';
   list.forEach(name => {
     const opt = document.createElement('option');
     opt.value = name;
-    opt.textContent = billingLabel(name, freeList || [], premiumList);
-    if (!state.apiKey && premiumList.includes(name)) opt.disabled = true;
+    opt.textContent = billingLabel(name, freeList || [], premiumList, type);
+    if (!state.apiKey && classifyModel(name, freeList || [], premiumList, type) === 'paid') opt.disabled = true;
     sel.appendChild(opt);
   });
-  if (list.includes(current) && !(premiumList.includes(current) && !state.apiKey)) sel.value = current;
+  if (list.includes(current) && !(classifyModel(current, freeList || [], premiumList, type) === 'paid' && !state.apiKey)) sel.value = current;
   else if (list.includes(preferred)) sel.value = preferred;
 }
 
@@ -1458,7 +1542,10 @@ function bindEvents() {
   $('imgModel').addEventListener('change', () => updateModelHint());
   $('txtModel').addEventListener('change', () => updateTypeModelHint('txtModel', 'txtModelHint', FREE_TEXT_MODELS, PREMIUM_TEXT_MODELS, 'txt'));
   $('audModel').addEventListener('change', () => updateTypeModelHint('audModel', 'audModelHint', FREE_AUDIO_MODELS, PREMIUM_AUDIO_MODELS, 'aud'));
-  $('vidModel').addEventListener('change', () => updateTypeModelHint('vidModel', 'vidModelHint', FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'vid'));
+  $('vidModel').addEventListener('change', () => {
+    applyVideoByModel($('vidModel').value);
+    updateTypeModelHint('vidModel', 'vidModelHint', FREE_VIDEO_MODELS, PREMIUM_VIDEO_MODELS, 'vid');
+  });
 
   // 音频
   $('audBtn').addEventListener('click', () => generateAudio(false));
