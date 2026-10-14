@@ -71,6 +71,8 @@ const VIDEO_RES_FREE = ['480p', '720p'];
 const VIDEO_RES_PREMIUM = ['480p', '720p', '1080p', '2k', '4k'];
 // 多数视频模型的画面比例；具体模型的支持范围见 videoAspectRatiosFor()
 const VIDEO_RATIO_COMMON = ['16:9', '9:16'];
+// 分辨率的展示顺序（按清晰度升序）；接口返回顺序各模型不一致
+const VIDEO_RES_ORDER = ['360p', '480p', '720p', '768p', '1080p', '2k', '4k'];
 
 const state = {
   apiKey: '',
@@ -672,6 +674,11 @@ function applyVideoByModel(modelName) {
     const subset = res.filter(r => VIDEO_RES_FREE.includes(r));
     res = subset.length ? subset : VIDEO_RES_FREE.slice();
   }
+  // 按清晰度升序排列，保证各模型下拉顺序一致
+  res.sort((a, b) => {
+    const ia = VIDEO_RES_ORDER.indexOf(a), ib = VIDEO_RES_ORDER.indexOf(b);
+    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib);
+  });
   const preferredRes = state.apiKey ? (res.includes('1080p') ? '1080p' : res[res.length - 1]) : '720p';
   fillVideoResolutionSelect($('vidRes'), res, preferredRes);
 
